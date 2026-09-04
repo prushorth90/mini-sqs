@@ -36,3 +36,7 @@ available depth and in-flight deliveries. Wait time is measured from message
 creation to each delivery, and processing latency from delivery to successful
 acknowledgement. Both latency summaries include exact nearest-rank P50, P95,
 and P99 values plus sample count and sum.
+
+Prometheus runs at `http://localhost:9090` under Docker Compose and scrapes the
+backend's `/metrics` endpoint every five seconds. Its time-series database uses
+a named volume, so collected development metrics survive container restarts.

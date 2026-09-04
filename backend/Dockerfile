@@ -7,10 +7,10 @@ RUN apt-get update \
 WORKDIR /app
 COPY CMakeLists.txt ./
 COPY src ./src
-RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
     && cmake --build build --parallel
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 WORKDIR /app
 COPY --from=build /app/build/mini-sqs ./mini-sqs
 EXPOSE 8080
