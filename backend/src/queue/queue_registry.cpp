@@ -1,5 +1,6 @@
 #include "queue/queue_registry.h"
 
+#include "metrics/metrics_registry.h"
 #include "storage/append_only_log.h"
 
 #include <algorithm>
@@ -7,8 +8,11 @@
 
 namespace mini_sqs {
 
+QueueRegistry::QueueRegistry(): metrics_(std::make_shared<MetricsRegistry>()) {}
+
 QueueRegistry::QueueRegistry(const std::filesystem::path& logPath):
-  log_(std::make_shared<AppendOnlyLog>(logPath)) {
+    log_(std::make_shared<AppendOnlyLog>(logPath)),
+    metrics_(std::make_shared<MetricsRegistry>()) {
     for (auto& [queueName, recovered] : log_->replay()) {
         auto queue = makeQueue(
             queueName, recovered.maxReceiveCount, recovered.visibilityTimeout);
@@ -18,6 +22,8 @@ QueueRegistry::QueueRegistry(const std::filesystem::path& logPath):
         for (auto& message : recovered.deadLetterMessages) {
             queue->restoreDeadLetter(std::move(message));
         }
+        metrics_->queueCreated(
+            queueName, recovered.availableMessages.size(), 0);
         queues_.emplace(std::move(queueName), std::move(queue));
     }
 }
@@ -36,6 +42,7 @@ bool QueueRegistry::create(
         log_->recordCreate(name, maxReceiveCount, visibilityTimeout);
     }
     queues_.emplace(std::move(name), std::move(queue));
+    metrics_->queueCreated(queueName, 0, 0);
     return true;
 }
 
@@ -66,7 +73,8 @@ std::shared_ptr<MessageQueue> QueueRegistry::makeQueue(
         };
     }
     return std::make_shared<MessageQueue>(
-        visibilityTimeout, maxReceiveCount, std::chrono::minutes(5), std::move(eventSink));
+        visibilityTimeout, maxReceiveCount, std::chrono::minutes(5),
+        std::move(eventSink), metrics_, std::move(queueName));
 }
 
 std::shared_ptr<MessageQueue> QueueRegistry::find(std::string_view queueName) const {
@@ -89,6 +97,10 @@ std::vector<std::string> QueueRegistry::list() const {
     }
     std::sort(names.begin(), names.end());
     return names;
+}
+
+std::shared_ptr<MetricsRegistry> QueueRegistry::metrics() const {
+    return metrics_;
 }
 
 }  // namespace mini_sqs

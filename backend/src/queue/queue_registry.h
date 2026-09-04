@@ -15,10 +15,11 @@
 namespace mini_sqs {
 
 class AppendOnlyLog;
+class MetricsRegistry;
 
 class QueueRegistry {
 public:
-    QueueRegistry() = default;
+    QueueRegistry();
     explicit QueueRegistry(const std::filesystem::path& logPath);
 
     bool create(
@@ -27,6 +28,7 @@ public:
         std::chrono::milliseconds visibilityTimeout = std::chrono::seconds(30));
     std::shared_ptr<MessageQueue> find(std::string_view queueName) const;
     std::vector<std::string> list() const;
+    std::shared_ptr<MetricsRegistry> metrics() const;
 
 private:
     std::shared_ptr<MessageQueue> makeQueue(
@@ -35,6 +37,7 @@ private:
         std::chrono::milliseconds visibilityTimeout);
 
     std::shared_ptr<AppendOnlyLog> log_;
+    std::shared_ptr<MetricsRegistry> metrics_;
     mutable std::mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<MessageQueue>> queues_;
 };

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -16,6 +17,8 @@
 #include <vector>
 
 namespace mini_sqs {
+
+class MetricsRegistry;
 
 struct Delivery {
     Message message;
@@ -43,7 +46,9 @@ public:
         std::chrono::milliseconds visibilityTimeout = std::chrono::seconds(30),
         std::uint32_t maxReceiveCount = 5,
         std::chrono::milliseconds deduplicationWindow = std::chrono::minutes(5),
-        QueueEventSink eventSink = {});
+        QueueEventSink eventSink = {},
+        std::shared_ptr<MetricsRegistry> metrics = {},
+        std::string queueName = {});
     ~MessageQueue();
 
     MessageQueue(const MessageQueue&) = delete;
@@ -61,6 +66,7 @@ private:
     struct InFlightEntry {
         Message message;
         std::chrono::steady_clock::time_point visibilityDeadline;
+        std::chrono::steady_clock::time_point receivedAt;
     };
 
     struct DeduplicationEntry {
@@ -85,6 +91,8 @@ private:
     std::chrono::milliseconds deduplicationWindow_;
     std::uint32_t maxReceiveCount_;
     QueueEventSink eventSink_;
+    std::shared_ptr<MetricsRegistry> metrics_;
+    std::string queueName_;
     bool isShuttingDown_{false};
     std::thread reaperThread_;
 };

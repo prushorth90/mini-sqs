@@ -27,3 +27,12 @@ At startup it replays the log, restoring outstanding messages and dead-letter
 queues. Messages that were in flight when the process stopped become available
 again, preserving at-least-once delivery. Set `MINI_SQS_LOG_PATH` to use a
 different file; Docker Compose stores the default path in a named volume.
+
+## Metrics
+
+`GET /metrics` exposes Prometheus text metrics labeled by queue. Counters cover
+published, acknowledged, retried, and dead-lettered messages; gauges report
+available depth and in-flight deliveries. Wait time is measured from message
+creation to each delivery, and processing latency from delivery to successful
+acknowledgement. Both latency summaries include exact nearest-rank P50, P95,
+and P99 values plus sample count and sum.

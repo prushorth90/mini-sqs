@@ -1,5 +1,6 @@
 #include "queue/message_queue.h"
 
+#include "metrics/metrics_registry.h"
 #include "queue/id_generator.h"
 
 #include <algorithm>
@@ -13,11 +14,15 @@ MessageQueue::MessageQueue(
         std::chrono::milliseconds visibilityTimeout,
         std::uint32_t maxReceiveCount,
         std::chrono::milliseconds deduplicationWindow,
-        QueueEventSink eventSink):
+        QueueEventSink eventSink,
+        std::shared_ptr<MetricsRegistry> metrics,
+        std::string queueName):
     visibilityTimeout_(visibilityTimeout),
     deduplicationWindow_(deduplicationWindow),
     maxReceiveCount_(maxReceiveCount),
-    eventSink_(std::move(eventSink)) {
+    eventSink_(std::move(eventSink)),
+    metrics_(std::move(metrics)),
+    queueName_(std::move(queueName)) {
     if (visibilityTimeout_ <= std::chrono::milliseconds::zero()) {
         throw std::invalid_argument("visibility timeout must be positive");
     }
@@ -66,6 +71,10 @@ PublishResult MessageQueue::publish(Message message) {
             eventSink_(QueueEventType::Publish, message);
         }
         availableMessages_.push_back(std::move(message));
+        if (metrics_) {
+            metrics_->messagePublished(
+                queueName_, availableMessages_.size(), inFlight_.size());
+        }
     }
     condition_.notify_all();
     return result;
@@ -95,10 +104,17 @@ std::optional<Delivery> MessageQueue::receive() {
         eventSink_(QueueEventType::Receive, message);
     }
     availableMessages_.pop_front();
+    const auto receivedAt = std::chrono::steady_clock::now();
     inFlight_.emplace(receiptHandle, InFlightEntry{
         .message = message,
         .visibilityDeadline = std::chrono::steady_clock::now() + visibilityTimeout_,
+        .receivedAt = receivedAt,
     });
+    if (metrics_) {
+        const auto waitTime = std::chrono::system_clock::now() - message.createdAt;
+        metrics_->messageReceived(
+            queueName_, waitTime, availableMessages_.size(), inFlight_.size());
+    }
     Delivery delivery{
         .message = std::move(message),
         .receiptHandle = std::move(receiptHandle),
@@ -118,7 +134,13 @@ bool MessageQueue::acknowledge(std::string_view receiptHandle) {
             if (eventSink_) {
                 eventSink_(QueueEventType::Acknowledge, delivery->second.message);
             }
+            const auto processingLatency =
+                std::chrono::steady_clock::now() - delivery->second.receivedAt;
             inFlight_.erase(delivery);
+            if (metrics_) {
+                metrics_->messageAcknowledged(
+                    queueName_, processingLatency, availableMessages_.size(), inFlight_.size());
+            }
         }
     }
     if (acknowledged) {
@@ -158,6 +180,8 @@ void MessageQueue::reapExpiredMessages() {
 
 bool MessageQueue::requeueExpiredMessages(std::chrono::steady_clock::time_point now) {
     bool requeued = false;
+    std::uint64_t retriedCount = 0;
+    std::uint64_t deadLetteredCount = 0;
     for (auto iterator = inFlight_.begin(); iterator != inFlight_.end();) {
         if (iterator->second.visibilityDeadline <= now) {
             if (iterator->second.message.receiveCount >= maxReceiveCount_) {
@@ -165,17 +189,27 @@ bool MessageQueue::requeueExpiredMessages(std::chrono::steady_clock::time_point 
                     eventSink_(QueueEventType::DeadLetter, iterator->second.message);
                 }
                 deadLetterMessages_.push_back(std::move(iterator->second.message));
+                ++deadLetteredCount;
             } else {
                 if (eventSink_) {
                     eventSink_(QueueEventType::Requeue, iterator->second.message);
                 }
                 availableMessages_.push_back(std::move(iterator->second.message));
                 requeued = true;
+                ++retriedCount;
             }
             iterator = inFlight_.erase(iterator);
         } else {
             ++iterator;
         }
+    }
+    if (metrics_ && retriedCount > 0) {
+        metrics_->messagesRetried(
+            queueName_, retriedCount, availableMessages_.size(), inFlight_.size());
+    }
+    if (metrics_ && deadLetteredCount > 0) {
+        metrics_->messagesDeadLettered(
+            queueName_, deadLetteredCount, availableMessages_.size(), inFlight_.size());
     }
     return requeued;
 }

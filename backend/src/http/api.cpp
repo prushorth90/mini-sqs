@@ -1,5 +1,6 @@
 #include "http/api.h"
 
+#include "metrics/metrics_registry.h"
 #include "queue/message.h"
 #include "queue/queue_registry.h"
 
@@ -51,6 +52,13 @@ bool isValidQueueName(std::string_view queueName) {
 }  // namespace
 
 void configureRoutes(QueueApi& app, QueueRegistry& queues) {
+    CROW_ROUTE(app, "/metrics")
+    ([&queues] {
+        crow::response response(200, queues.metrics()->prometheusText());
+        response.set_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+        return response;
+    });
+
     CROW_ROUTE(app, "/queues")
         .methods(crow::HTTPMethod::POST)
     ([&queues](const crow::request& request) {
