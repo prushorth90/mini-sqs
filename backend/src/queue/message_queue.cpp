@@ -154,6 +154,28 @@ std::vector<Message> MessageQueue::deadLetterMessages() const {
     return {deadLetterMessages_.begin(), deadLetterMessages_.end()};
 }
 
+std::vector<MessageSnapshot> MessageQueue::recentMessages(std::size_t limit) const {
+    std::lock_guard lock(mutex_);
+    std::vector<MessageSnapshot> messages;
+    messages.reserve(availableMessages_.size() + inFlight_.size() + deadLetterMessages_.size());
+    for (const auto& message : availableMessages_) {
+        messages.push_back({.message = message, .status = "available"});
+    }
+    for (const auto& [receiptHandle, delivery] : inFlight_) {
+        messages.push_back({.message = delivery.message, .status = "in-flight"});
+    }
+    for (const auto& message : deadLetterMessages_) {
+        messages.push_back({.message = message, .status = "dead-letter"});
+    }
+    std::sort(messages.begin(), messages.end(), [](const auto& left, const auto& right) {
+        return left.message.createdAt > right.message.createdAt;
+    });
+    if (messages.size() > limit) {
+        messages.resize(limit);
+    }
+    return messages;
+}
+
 void MessageQueue::reapExpiredMessages() {
     std::unique_lock lock(mutex_);
     while (!isShuttingDown_) {

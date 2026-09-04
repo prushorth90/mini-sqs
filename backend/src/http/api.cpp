@@ -185,6 +185,25 @@ void configureRoutes(QueueApi& app, QueueRegistry& queues) {
         body["messages"] = std::move(messages);
         return jsonResponse(200, std::move(body));
     });
+
+    CROW_ROUTE(app, "/queues/<string>/messages/recent")
+        .methods(crow::HTTPMethod::GET)
+    ([&queues](const std::string& queueName) {
+        const auto queue = queues.find(queueName);
+        if (!queue) {
+            return jsonResponse(404, {{"error", "queue not found"}});
+        }
+
+        crow::json::wvalue::list messages;
+        for (const auto& snapshot : queue->recentMessages()) {
+            auto message = messageJson(snapshot.message);
+            message["status"] = snapshot.status;
+            messages.push_back(std::move(message));
+        }
+        crow::json::wvalue body;
+        body["messages"] = std::move(messages);
+        return jsonResponse(200, std::move(body));
+    });
 }
 
 }  // namespace mini_sqs::http

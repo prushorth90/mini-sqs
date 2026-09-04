@@ -30,6 +30,11 @@ struct PublishResult {
     bool deduplicated;
 };
 
+struct MessageSnapshot {
+    Message message;
+    std::string status;
+};
+
 enum class QueueEventType {
     Publish,
     Receive,
@@ -58,6 +63,7 @@ public:
     std::optional<Delivery> receive();
     bool acknowledge(std::string_view receiptHandle);
     std::vector<Message> deadLetterMessages() const;
+    std::vector<MessageSnapshot> recentMessages(std::size_t limit = 50) const;
     void shutdown();
 
 private:
