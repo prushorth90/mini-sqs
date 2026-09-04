@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { FormEvent } from 'react'
 import {
   Activity,
   Box,
@@ -7,6 +8,7 @@ import {
   Inbox,
   RefreshCw,
   RotateCcw,
+  Send,
   TriangleAlert,
 } from 'lucide-react'
 import './App.css'
@@ -78,12 +80,17 @@ function formatLatency(seconds: number) {
 export default function App() {
   const [queues, setQueues] = useState<string[]>([])
   const [selectedQueue, setSelectedQueue] = useState('')
+  const selectedQueueRef = useRef('')
   const [messages, setMessages] = useState<Message[]>([])
   const [metrics, setMetrics] = useState(emptyMetrics)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [messageBody, setMessageBody] = useState('')
+  const [idempotencyKey, setIdempotencyKey] = useState('')
+  const [publishing, setPublishing] = useState(false)
+  const [publishFeedback, setPublishFeedback] = useState('')
 
   async function loadQueues() {
     const response = await fetchJson<{ queues: string[] }>(`${apiBase}/queues`)
@@ -135,6 +142,44 @@ export default function App() {
     }
   }
 
+  async function handlePublish(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const body = messageBody.trim()
+    if (!selectedQueue || !body) return
+
+    setPublishing(true)
+    setPublishFeedback('')
+    try {
+      const response = await fetch(`${apiBase}/queues/${encodeURIComponent(selectedQueue)}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          body,
+          ...(idempotencyKey.trim() ? { idempotencyKey: idempotencyKey.trim() } : {}),
+        }),
+      })
+      if (!response.ok) throw new Error(`Publish failed with status ${response.status}`)
+      const result = await response.json() as { messageId: string; deduplicated: boolean }
+      setMessageBody('')
+      setIdempotencyKey('')
+      setPublishFeedback(
+        result.deduplicated
+          ? `Duplicate request returned ${result.messageId.slice(0, 8)}`
+          : `Published ${result.messageId.slice(0, 8)}`,
+      )
+      await loadQueue(selectedQueue, true)
+      window.setTimeout(() => {
+        if (selectedQueueRef.current === selectedQueue) void loadQueue(selectedQueue, true)
+      }, 5500)
+    } catch (requestError) {
+      setPublishFeedback(
+        requestError instanceof Error ? requestError.message : 'Unable to publish message',
+      )
+    } finally {
+      setPublishing(false)
+    }
+  }
+
   useEffect(() => {
     loadQueues().catch((requestError: unknown) => {
       setError(requestError instanceof Error ? requestError.message : 'Unable to load queues')
@@ -147,6 +192,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    selectedQueueRef.current = selectedQueue
     void loadQueue(selectedQueue)
     const interval = window.setInterval(() => void loadQueue(selectedQueue, true), 5000)
     return () => window.clearInterval(interval)
@@ -220,6 +266,54 @@ export default function App() {
               <strong>{loading ? '—' : value}</strong>
             </article>
           ))}
+        </section>
+
+        <section className="publish-panel">
+          <div className="publish-heading">
+            <div><p className="eyebrow">Producer</p><h2>Publish message</h2></div>
+            {publishFeedback && <span className="publish-feedback" role="status">{publishFeedback}</span>}
+          </div>
+          <form className="publish-form" onSubmit={handlePublish}>
+            <label>
+              <span>Queue</span>
+              <select
+                disabled={queues.length === 0 || publishing}
+                onChange={(event) => setSelectedQueue(event.target.value)}
+                value={selectedQueue}
+              >
+                {queues.map((queue) => <option key={queue} value={queue}>{queue}</option>)}
+              </select>
+            </label>
+            <label className="body-field">
+              <span>Message body</span>
+              <textarea
+                disabled={!selectedQueue || publishing}
+                onChange={(event) => setMessageBody(event.target.value)}
+                placeholder="Enter message payload"
+                required
+                rows={3}
+                value={messageBody}
+              />
+            </label>
+            <label>
+              <span>Idempotency key <small>optional</small></span>
+              <input
+                disabled={!selectedQueue || publishing}
+                onChange={(event) => setIdempotencyKey(event.target.value)}
+                placeholder="order-123"
+                type="text"
+                value={idempotencyKey}
+              />
+            </label>
+            <button
+              className="publish-button"
+              disabled={!selectedQueue || !messageBody.trim() || publishing}
+              type="submit"
+            >
+              <Send size={16} />
+              <span>{publishing ? 'Publishing…' : 'Publish'}</span>
+            </button>
+          </form>
         </section>
 
         <section className="messages-panel">
