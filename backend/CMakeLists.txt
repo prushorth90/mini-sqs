@@ -2,18 +2,41 @@ cmake_minimum_required(VERSION 3.20)
 
 project(mini_sqs_backend LANGUAGES CXX)
 
+include(FetchContent)
+
 find_package(Threads REQUIRED)
+
+FetchContent_Declare(
+	Crow
+	GIT_REPOSITORY https://github.com/CrowCpp/Crow.git
+	GIT_TAG v1.3.3
+	GIT_SHALLOW TRUE
+)
+set(CROW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CROW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CROW_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(Crow)
 
 add_library(mini-sqs-core
 	src/queue/message.cpp
 	src/queue/message_queue.cpp
+	src/queue/queue_registry.cpp
 )
 target_compile_features(mini-sqs-core PUBLIC cxx_std_20)
 target_include_directories(mini-sqs-core PUBLIC src)
 
-add_executable(mini-sqs src/main.cpp)
+add_library(mini-sqs-http
+	src/http/api.cpp
+)
+target_compile_features(mini-sqs-http PUBLIC cxx_std_20)
+target_include_directories(mini-sqs-http PUBLIC src)
+target_link_libraries(mini-sqs-http PUBLIC mini-sqs-core Crow::Crow)
+
+add_executable(mini-sqs
+	src/main.cpp
+)
 target_compile_features(mini-sqs PRIVATE cxx_std_20)
-target_link_libraries(mini-sqs PRIVATE mini-sqs-core)
+target_link_libraries(mini-sqs PRIVATE mini-sqs-http Threads::Threads)
 
 include(CTest)
 

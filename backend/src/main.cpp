@@ -1,11 +1,15 @@
-#include <chrono>
+#include "http/api.h"
+#include "queue/queue_registry.h"
+
+#include <crow.h>
+
 #include <iostream>
-#include <thread>
 
 int main() {
-    std::cout << "mini-sqs backend started on port 8080" << std::endl;
+    mini_sqs::QueueRegistry queues;
+    mini_sqs::http::QueueApi app;
+    mini_sqs::http::configureRoutes(app, queues);
 
-    while (true) {
-        std::this_thread::sleep_for(std::chrono::hours(24));
-    }
+    std::cout << "mini-sqs backend started on port 8080" << std::endl;
+    app.port(8080).multithreaded().run();
 }

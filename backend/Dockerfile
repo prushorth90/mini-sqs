@@ -1,7 +1,7 @@
 FROM gcc:14 AS build
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends cmake \
+    && apt-get install --yes --no-install-recommends cmake git libasio-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
