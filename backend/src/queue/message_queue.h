@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 
 namespace mini_sqs {
@@ -22,6 +23,10 @@ class MessageQueue {
 public:
     explicit MessageQueue(
         std::chrono::milliseconds visibilityTimeout = std::chrono::seconds(30));
+    ~MessageQueue();
+
+    MessageQueue(const MessageQueue&) = delete;
+    MessageQueue& operator=(const MessageQueue&) = delete;
 
     void publish(Message message);
     std::optional<Delivery> receive();
@@ -34,7 +39,8 @@ private:
         std::chrono::steady_clock::time_point visibilityDeadline;
     };
 
-    void requeueExpiredMessages(std::chrono::steady_clock::time_point now);
+    void reapExpiredMessages();
+    bool requeueExpiredMessages(std::chrono::steady_clock::time_point now);
     std::chrono::steady_clock::time_point nextVisibilityDeadline() const;
 
     std::deque<Message> availableMessages_;
@@ -43,6 +49,7 @@ private:
     std::condition_variable condition_;
     std::chrono::milliseconds visibilityTimeout_;
     bool isShuttingDown_{false};
+    std::thread reaperThread_;
 };
 
 }  // namespace mini_sqs

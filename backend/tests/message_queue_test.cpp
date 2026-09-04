@@ -86,6 +86,10 @@ void redeliversAfterVisibilityTimeout() {
     queue.publish(mini_sqs::Message::create("try again"));
 
     const auto first = queue.receive();
+    std::this_thread::sleep_for(60ms);
+
+    expect(!queue.acknowledge(first->receiptHandle),
+           "reaper should invalidate an expired receipt without another receive call");
     const auto second = queue.receive();
 
     expect(first.has_value() && second.has_value(), "unacknowledged message should be redelivered");
@@ -94,8 +98,26 @@ void redeliversAfterVisibilityTimeout() {
     expect(second->message.receiveCount == 2, "redelivery should increment receive count");
     expect(second->receiptHandle != first->receiptHandle,
            "redelivery should issue a new receipt handle");
-    expect(!queue.acknowledge(first->receiptHandle), "expired receipt handle should be invalid");
     expect(queue.acknowledge(second->receiptHandle), "current receipt handle should acknowledge");
+}
+
+void acknowledgementWinsBeforeVisibilityTimeout() {
+    mini_sqs::MessageQueue queue(100ms);
+    queue.publish(mini_sqs::Message::create("finish in time"));
+    const auto delivery = queue.receive();
+
+    std::this_thread::sleep_for(20ms);
+    expect(queue.acknowledge(delivery->receiptHandle),
+           "acknowledgement before the deadline should succeed");
+
+    auto nextReceive = std::async(std::launch::async, [&queue] {
+        return queue.receive();
+    });
+    expect(nextReceive.wait_for(120ms) == std::future_status::timeout,
+           "acknowledged message should not be requeued at its old deadline");
+
+    queue.shutdown();
+    expect(!nextReceive.get().has_value(), "shutdown should wake the waiting receiver");
 }
 
 void wakesBlockedConsumerDuringShutdown() {
@@ -127,6 +149,7 @@ int main() {
         acknowledgesOnlyInFlightMessages();
         keepsUnacknowledgedMessagesInFlight();
         redeliversAfterVisibilityTimeout();
+        acknowledgementWinsBeforeVisibilityTimeout();
         wakesBlockedConsumerDuringShutdown();
         std::cout << "message queue tests passed\n";
         return 0;
