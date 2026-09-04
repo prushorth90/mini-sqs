@@ -1,14 +1,36 @@
 #include "queue/queue_registry.h"
 
+#include <algorithm>
+
 namespace mini_sqs {
 
-std::shared_ptr<MessageQueue> QueueRegistry::getOrCreate(std::string_view queueName) {
+bool QueueRegistry::create(std::string_view queueName) {
     std::lock_guard lock(mutex_);
-    auto [iterator, inserted] = queues_.try_emplace(std::string(queueName));
-    if (inserted) {
-        iterator->second = std::make_shared<MessageQueue>();
+    auto [iterator, inserted] = queues_.try_emplace(
+        std::string(queueName), std::make_shared<MessageQueue>());
+    return inserted;
+}
+
+std::shared_ptr<MessageQueue> QueueRegistry::find(std::string_view queueName) const {
+    std::lock_guard lock(mutex_);
+    const auto iterator = queues_.find(std::string(queueName));
+    if (iterator == queues_.end()) {
+        return nullptr;
     }
     return iterator->second;
+}
+
+std::vector<std::string> QueueRegistry::list() const {
+    std::vector<std::string> names;
+    {
+        std::lock_guard lock(mutex_);
+        names.reserve(queues_.size());
+        for (const auto& [name, queue] : queues_) {
+            names.push_back(name);
+        }
+    }
+    std::sort(names.begin(), names.end());
+    return names;
 }
 
 }  // namespace mini_sqs
