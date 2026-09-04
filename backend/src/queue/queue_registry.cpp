@@ -4,10 +4,14 @@
 
 namespace mini_sqs {
 
-bool QueueRegistry::create(std::string_view queueName) {
+bool QueueRegistry::create(
+    std::string_view queueName,
+    std::uint32_t maxReceiveCount,
+    std::chrono::milliseconds visibilityTimeout) {
     std::lock_guard lock(mutex_);
     auto [iterator, inserted] = queues_.try_emplace(
-        std::string(queueName), std::make_shared<MessageQueue>());
+        std::string(queueName),
+        std::make_shared<MessageQueue>(visibilityTimeout, maxReceiveCount));
     return inserted;
 }
 

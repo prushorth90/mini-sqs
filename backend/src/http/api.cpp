@@ -63,10 +63,38 @@ void configureRoutes(QueueApi& app, QueueRegistry& queues) {
         if (!isValidQueueName(queueName)) {
             return jsonResponse(400, {{"error", "queue name must use 1-80 letters, numbers, hyphens, or underscores"}});
         }
-        if (!queues.create(queueName)) {
+
+        std::uint32_t maxReceiveCount = 5;
+        if (payload.has("maxReceiveCount")) {
+            if (payload["maxReceiveCount"].t() != crow::json::type::Number
+                || payload["maxReceiveCount"].nt() == crow::json::num_type::Floating_point
+                || payload["maxReceiveCount"].i() < 1
+                || payload["maxReceiveCount"].i() > 1'000) {
+                return jsonResponse(400, {{"error", "maxReceiveCount must be an integer from 1 to 1000"}});
+            }
+            maxReceiveCount = static_cast<std::uint32_t>(payload["maxReceiveCount"].i());
+        }
+
+        std::int64_t visibilityTimeoutMs = 30'000;
+        if (payload.has("visibilityTimeoutMs")) {
+            if (payload["visibilityTimeoutMs"].t() != crow::json::type::Number
+                || payload["visibilityTimeoutMs"].nt() == crow::json::num_type::Floating_point
+                || payload["visibilityTimeoutMs"].i() < 1
+                || payload["visibilityTimeoutMs"].i() > 43'200'000) {
+                return jsonResponse(400, {{"error", "visibilityTimeoutMs must be an integer from 1 to 43200000"}});
+            }
+            visibilityTimeoutMs = payload["visibilityTimeoutMs"].i();
+        }
+
+        if (!queues.create(
+                queueName, maxReceiveCount, std::chrono::milliseconds(visibilityTimeoutMs))) {
             return jsonResponse(409, {{"error", "queue already exists"}});
         }
-        return jsonResponse(201, {{"name", queueName}});
+        return jsonResponse(201, {
+            {"name", queueName},
+            {"maxReceiveCount", maxReceiveCount},
+            {"visibilityTimeoutMs", visibilityTimeoutMs},
+        });
     });
 
     CROW_ROUTE(app, "/queues")
@@ -129,6 +157,23 @@ void configureRoutes(QueueApi& app, QueueRegistry& queues) {
             return jsonResponse(404, {{"error", "receipt handle not found"}});
         }
         return crow::response(204);
+    });
+
+    CROW_ROUTE(app, "/queues/<string>/dlq/messages")
+        .methods(crow::HTTPMethod::GET)
+    ([&queues](const std::string& queueName) {
+        const auto queue = queues.find(queueName);
+        if (!queue) {
+            return jsonResponse(404, {{"error", "queue not found"}});
+        }
+
+        crow::json::wvalue::list messages;
+        for (const auto& message : queue->deadLetterMessages()) {
+            messages.push_back(messageJson(message));
+        }
+        crow::json::wvalue body;
+        body["messages"] = std::move(messages);
+        return jsonResponse(200, std::move(body));
     });
 }
 

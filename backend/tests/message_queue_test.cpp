@@ -126,6 +126,28 @@ void acknowledgementWinsBeforeVisibilityTimeout() {
     expect(!nextReceive.get().has_value(), "shutdown should wake the waiting receiver");
 }
 
+    void movesMessagesToDeadLetterQueueAfterMaximumReceives() {
+        mini_sqs::MessageQueue queue(20ms, 2);
+        queue.publish(mini_sqs::Message::create("cannot process"));
+
+        const auto first = queue.receive();
+        const auto second = queue.receive();
+        std::this_thread::sleep_for(50ms);
+        const auto deadLetters = queue.deadLetterMessages();
+
+        expect(first.has_value() && second.has_value(), "message should receive both allowed attempts");
+        expect(first->message.messageId == second->message.messageId,
+            "retry should preserve the original message");
+        expect(second->message.receiveCount == 2, "second delivery should be the final allowed attempt");
+        expect(deadLetters.size() == 1, "exhausted message should move to the dead-letter queue");
+        expect(deadLetters.front().messageId == first->message.messageId,
+            "dead-letter queue should contain the exhausted message");
+        expect(deadLetters.front().receiveCount == 2,
+            "dead-letter message should retain its receive count");
+        expect(!queue.acknowledge(second->receiptHandle),
+            "receipt handle should expire when the message is dead-lettered");
+    }
+
 void wakesBlockedConsumerDuringShutdown() {
     mini_sqs::MessageQueue queue;
     std::promise<void> consumerStarted;
@@ -156,6 +178,7 @@ int main() {
         keepsUnacknowledgedMessagesInFlight();
         redeliversAfterVisibilityTimeout();
         acknowledgementWinsBeforeVisibilityTimeout();
+        movesMessagesToDeadLetterQueueAfterMaximumReceives();
         wakesBlockedConsumerDuringShutdown();
         std::cout << "message queue tests passed\n";
         return 0;

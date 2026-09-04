@@ -9,11 +9,17 @@
 
 namespace mini_sqs {
 
-MessageQueue::MessageQueue(std::chrono::milliseconds visibilityTimeout):
-  visibilityTimeout_(visibilityTimeout) {
+MessageQueue::MessageQueue(
+        std::chrono::milliseconds visibilityTimeout,
+        std::uint32_t maxReceiveCount):
+    visibilityTimeout_(visibilityTimeout),
+    maxReceiveCount_(maxReceiveCount) {
     if (visibilityTimeout_ <= std::chrono::milliseconds::zero()) {
         throw std::invalid_argument("visibility timeout must be positive");
     }
+        if (maxReceiveCount_ == 0) {
+                throw std::invalid_argument("maximum receive count must be positive");
+        }
     reaperThread_ = std::thread(&MessageQueue::reapExpiredMessages, this);
 }
 
@@ -78,6 +84,11 @@ bool MessageQueue::acknowledge(std::string_view receiptHandle) {
     return acknowledged;
 }
 
+std::vector<Message> MessageQueue::deadLetterMessages() const {
+    std::lock_guard lock(mutex_);
+    return {deadLetterMessages_.begin(), deadLetterMessages_.end()};
+}
+
 void MessageQueue::reapExpiredMessages() {
     std::unique_lock lock(mutex_);
     while (!isShuttingDown_) {
@@ -106,9 +117,13 @@ bool MessageQueue::requeueExpiredMessages(std::chrono::steady_clock::time_point 
     bool requeued = false;
     for (auto iterator = inFlight_.begin(); iterator != inFlight_.end();) {
         if (iterator->second.visibilityDeadline <= now) {
-            availableMessages_.push_back(std::move(iterator->second.message));
+            if (iterator->second.message.receiveCount >= maxReceiveCount_) {
+                deadLetterMessages_.push_back(std::move(iterator->second.message));
+            } else {
+                availableMessages_.push_back(std::move(iterator->second.message));
+                requeued = true;
+            }
             iterator = inFlight_.erase(iterator);
-            requeued = true;
         } else {
             ++iterator;
         }

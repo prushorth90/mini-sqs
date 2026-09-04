@@ -4,6 +4,7 @@
 
 #include <condition_variable>
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <optional>
@@ -11,6 +12,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace mini_sqs {
 
@@ -22,7 +24,8 @@ struct Delivery {
 class MessageQueue {
 public:
     explicit MessageQueue(
-        std::chrono::milliseconds visibilityTimeout = std::chrono::seconds(30));
+        std::chrono::milliseconds visibilityTimeout = std::chrono::seconds(30),
+        std::uint32_t maxReceiveCount = 5);
     ~MessageQueue();
 
     MessageQueue(const MessageQueue&) = delete;
@@ -31,6 +34,7 @@ public:
     void publish(Message message);
     std::optional<Delivery> receive();
     bool acknowledge(std::string_view receiptHandle);
+    std::vector<Message> deadLetterMessages() const;
     void shutdown();
 
 private:
@@ -45,9 +49,11 @@ private:
 
     std::deque<Message> availableMessages_;
     std::unordered_map<std::string, InFlightEntry> inFlight_;
-    std::mutex mutex_;
+    std::deque<Message> deadLetterMessages_;
+    mutable std::mutex mutex_;
     std::condition_variable condition_;
     std::chrono::milliseconds visibilityTimeout_;
+    std::uint32_t maxReceiveCount_;
     bool isShuttingDown_{false};
     std::thread reaperThread_;
 };
