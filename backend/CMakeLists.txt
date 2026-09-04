@@ -2,5 +2,20 @@ cmake_minimum_required(VERSION 3.20)
 
 project(mini_sqs_backend LANGUAGES CXX)
 
+add_library(mini-sqs-core
+	src/queue/message.cpp
+)
+target_compile_features(mini-sqs-core PUBLIC cxx_std_20)
+target_include_directories(mini-sqs-core PUBLIC src)
+
 add_executable(mini-sqs src/main.cpp)
 target_compile_features(mini-sqs PRIVATE cxx_std_20)
+target_link_libraries(mini-sqs PRIVATE mini-sqs-core)
+
+include(CTest)
+
+if(BUILD_TESTING)
+	add_executable(message-tests tests/message_test.cpp)
+	target_link_libraries(message-tests PRIVATE mini-sqs-core)
+	add_test(NAME message-tests COMMAND message-tests)
+endif()
