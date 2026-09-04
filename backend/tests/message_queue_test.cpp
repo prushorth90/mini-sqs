@@ -26,9 +26,11 @@ void deliversMessagesInPublishOrder() {
 
     expect(first.has_value(), "first published message should be received");
     expect(second.has_value(), "second published message should be received");
-    expect(first->body == "first", "queue should preserve FIFO order");
-    expect(second->body == "second", "queue should preserve FIFO order");
-    expect(first->receiveCount == 1, "receiving should increment the receive count");
+    expect(first->message.body == "first", "queue should preserve FIFO order");
+    expect(second->message.body == "second", "queue should preserve FIFO order");
+    expect(first->message.receiveCount == 1, "receiving should increment the receive count");
+    expect(!first->receiptHandle.empty(), "delivery should contain a receipt handle");
+    expect(first->receiptHandle != second->receiptHandle, "receipt handles should be unique");
 }
 
 void wakesBlockedConsumerWhenMessageIsPublished() {
@@ -48,7 +50,52 @@ void wakesBlockedConsumerWhenMessageIsPublished() {
 
     expect(received.wait_for(1s) == std::future_status::ready,
            "publishing should wake a blocked consumer");
-    expect(received.get()->body == "wake up", "consumer should receive the published message");
+    expect(received.get()->message.body == "wake up", "consumer should receive the published message");
+}
+
+void acknowledgesOnlyInFlightMessages() {
+    mini_sqs::MessageQueue queue;
+    queue.publish(mini_sqs::Message::create("acknowledge me"));
+
+    const auto delivery = queue.receive();
+
+    expect(delivery.has_value(), "published message should be delivered");
+    expect(!queue.acknowledge("unknown"), "unknown receipt handle should not acknowledge");
+    expect(queue.acknowledge(delivery->receiptHandle), "valid receipt handle should acknowledge");
+    expect(!queue.acknowledge(delivery->receiptHandle), "receipt handle should be single use");
+}
+
+void keepsUnacknowledgedMessagesInFlight() {
+    mini_sqs::MessageQueue queue;
+    queue.publish(mini_sqs::Message::create("in flight"));
+    const auto delivery = queue.receive();
+    auto nextReceive = std::async(std::launch::async, [&queue] {
+        return queue.receive();
+    });
+
+    expect(delivery.has_value(), "published message should be delivered");
+    expect(nextReceive.wait_for(50ms) == std::future_status::timeout,
+           "unacknowledged message should not remain available");
+
+    queue.shutdown();
+    expect(!nextReceive.get().has_value(), "shutdown should wake the waiting receiver");
+}
+
+void redeliversAfterVisibilityTimeout() {
+    mini_sqs::MessageQueue queue(30ms);
+    queue.publish(mini_sqs::Message::create("try again"));
+
+    const auto first = queue.receive();
+    const auto second = queue.receive();
+
+    expect(first.has_value() && second.has_value(), "unacknowledged message should be redelivered");
+    expect(second->message.messageId == first->message.messageId,
+           "redelivery should preserve the message ID");
+    expect(second->message.receiveCount == 2, "redelivery should increment receive count");
+    expect(second->receiptHandle != first->receiptHandle,
+           "redelivery should issue a new receipt handle");
+    expect(!queue.acknowledge(first->receiptHandle), "expired receipt handle should be invalid");
+    expect(queue.acknowledge(second->receiptHandle), "current receipt handle should acknowledge");
 }
 
 void wakesBlockedConsumerDuringShutdown() {
@@ -77,6 +124,9 @@ int main() {
     try {
         deliversMessagesInPublishOrder();
         wakesBlockedConsumerWhenMessageIsPublished();
+        acknowledgesOnlyInFlightMessages();
+        keepsUnacknowledgedMessagesInFlight();
+        redeliversAfterVisibilityTimeout();
         wakesBlockedConsumerDuringShutdown();
         std::cout << "message queue tests passed\n";
         return 0;

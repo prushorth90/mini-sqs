@@ -18,6 +18,7 @@ set(CROW_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(Crow)
 
 add_library(mini-sqs-core
+	src/queue/id_generator.cpp
 	src/queue/message.cpp
 	src/queue/message_queue.cpp
 	src/queue/queue_registry.cpp

@@ -33,6 +33,12 @@ crow::json::wvalue messageJson(const Message& message) {
     return body;
 }
 
+crow::json::wvalue deliveryJson(const Delivery& delivery) {
+    auto body = messageJson(delivery.message);
+    body["receiptHandle"] = delivery.receiptHandle;
+    return body;
+}
+
 bool isValidQueueName(std::string_view queueName) {
     if (queueName.empty() || queueName.size() > 80) {
         return false;
@@ -105,17 +111,24 @@ void configureRoutes(QueueApi& app, QueueRegistry& queues) {
             return jsonResponse(404, {{"error", "queue not found"}});
         }
 
-        const auto message = queue->receive();
-        if (!message.has_value()) {
+        const auto delivery = queue->receive();
+        if (!delivery.has_value()) {
             return crow::response(204);
         }
-        return jsonResponse(200, messageJson(*message));
+        return jsonResponse(200, deliveryJson(*delivery));
     });
 
     CROW_ROUTE(app, "/queues/<string>/messages/<string>")
         .methods(crow::HTTPMethod::DELETE)
-    ([](const std::string&, const std::string&) {
-        return jsonResponse(501, {{"error", "message acknowledgement is not implemented yet"}});
+    ([&queues](const std::string& queueName, const std::string& receiptHandle) {
+        const auto queue = queues.find(queueName);
+        if (!queue) {
+            return jsonResponse(404, {{"error", "queue not found"}});
+        }
+        if (!queue->acknowledge(receiptHandle)) {
+            return jsonResponse(404, {{"error", "receipt handle not found"}});
+        }
+        return crow::response(204);
     });
 }
 

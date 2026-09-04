@@ -39,9 +39,9 @@ void isolatesMessagesByQueueName() {
     queues.find("orders")->publish(mini_sqs::Message::create("order-created"));
     queues.find("notifications")->publish(mini_sqs::Message::create("email-user"));
 
-    expect(queues.find("orders")->receive()->body == "order-created",
+        expect(queues.find("orders")->receive()->message.body == "order-created",
            "orders queue should contain only its message");
-    expect(queues.find("notifications")->receive()->body == "email-user",
+        expect(queues.find("notifications")->receive()->message.body == "email-user",
            "notifications queue should contain only its message");
 }
 

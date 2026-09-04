@@ -26,7 +26,8 @@ int main() {
     std::array<std::thread, consumerCount> consumers;
     for (auto& consumer : consumers) {
         consumer = std::thread([&queue, &consumed] {
-            while (queue.receive().has_value()) {
+            while (const auto delivery = queue.receive()) {
+                queue.acknowledge(delivery->receiptHandle);
                 consumed.fetch_add(1, std::memory_order_relaxed);
             }
         });
