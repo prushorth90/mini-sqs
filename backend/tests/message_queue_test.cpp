@@ -31,6 +31,8 @@ void deliversMessagesInPublishOrder() {
     expect(first->message.receiveCount == 1, "receiving should increment the receive count");
     expect(!first->receiptHandle.empty(), "delivery should contain a receipt handle");
     expect(first->receiptHandle != second->receiptHandle, "receipt handles should be unique");
+        expect(first->receiptHandle.starts_with(first->message.messageId + "-delivery-1-"),
+            "first receipt handle should contain delivery version 1");
 }
 
 void wakesBlockedConsumerWhenMessageIsPublished() {
@@ -98,6 +100,10 @@ void redeliversAfterVisibilityTimeout() {
     expect(second->message.receiveCount == 2, "redelivery should increment receive count");
     expect(second->receiptHandle != first->receiptHandle,
            "redelivery should issue a new receipt handle");
+        expect(second->receiptHandle.starts_with(second->message.messageId + "-delivery-2-"),
+            "redelivery receipt handle should contain delivery version 2");
+        expect(!queue.acknowledge(first->receiptHandle),
+            "old delivery version must not acknowledge the current retry");
     expect(queue.acknowledge(second->receiptHandle), "current receipt handle should acknowledge");
 }
 

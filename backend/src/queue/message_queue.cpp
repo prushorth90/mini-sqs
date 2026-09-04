@@ -48,7 +48,9 @@ std::optional<Delivery> MessageQueue::receive() {
 
     std::string receiptHandle;
     do {
-        receiptHandle = generateUniqueId();
+        receiptHandle = message.messageId
+            + "-delivery-" + std::to_string(message.receiveCount)
+            + "-" + generateUniqueId();
     } while (inFlight_.contains(receiptHandle));
 
     inFlight_.emplace(receiptHandle, InFlightEntry{
