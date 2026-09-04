@@ -1,4 +1,6 @@
 .DS_Store
+data/
 backend/build/
+backend/data/
 frontend/node_modules/
 frontend/dist/

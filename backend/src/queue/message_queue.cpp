@@ -12,10 +12,12 @@ namespace mini_sqs {
 MessageQueue::MessageQueue(
         std::chrono::milliseconds visibilityTimeout,
         std::uint32_t maxReceiveCount,
-        std::chrono::milliseconds deduplicationWindow):
+        std::chrono::milliseconds deduplicationWindow,
+        QueueEventSink eventSink):
     visibilityTimeout_(visibilityTimeout),
     deduplicationWindow_(deduplicationWindow),
-    maxReceiveCount_(maxReceiveCount) {
+    maxReceiveCount_(maxReceiveCount),
+    eventSink_(std::move(eventSink)) {
     if (visibilityTimeout_ <= std::chrono::milliseconds::zero()) {
         throw std::invalid_argument("visibility timeout must be positive");
     }
@@ -60,6 +62,9 @@ PublishResult MessageQueue::publish(Message message) {
             .message = message,
             .deduplicated = false,
         };
+        if (eventSink_) {
+            eventSink_(QueueEventType::Publish, message);
+        }
         availableMessages_.push_back(std::move(message));
     }
     condition_.notify_all();
@@ -76,8 +81,7 @@ std::optional<Delivery> MessageQueue::receive() {
         return std::nullopt;
     }
 
-    Message message = std::move(availableMessages_.front());
-    availableMessages_.pop_front();
+    Message message = availableMessages_.front();
     ++message.receiveCount;
 
     std::string receiptHandle;
@@ -87,6 +91,10 @@ std::optional<Delivery> MessageQueue::receive() {
             + "-" + generateUniqueId();
     } while (inFlight_.contains(receiptHandle));
 
+    if (eventSink_) {
+        eventSink_(QueueEventType::Receive, message);
+    }
+    availableMessages_.pop_front();
     inFlight_.emplace(receiptHandle, InFlightEntry{
         .message = message,
         .visibilityDeadline = std::chrono::steady_clock::now() + visibilityTimeout_,
@@ -104,7 +112,14 @@ bool MessageQueue::acknowledge(std::string_view receiptHandle) {
     bool acknowledged;
     {
         std::lock_guard lock(mutex_);
-        acknowledged = inFlight_.erase(std::string(receiptHandle)) == 1;
+        const auto delivery = inFlight_.find(std::string(receiptHandle));
+        acknowledged = delivery != inFlight_.end();
+        if (acknowledged) {
+            if (eventSink_) {
+                eventSink_(QueueEventType::Acknowledge, delivery->second.message);
+            }
+            inFlight_.erase(delivery);
+        }
     }
     if (acknowledged) {
         condition_.notify_all();
@@ -146,8 +161,14 @@ bool MessageQueue::requeueExpiredMessages(std::chrono::steady_clock::time_point 
     for (auto iterator = inFlight_.begin(); iterator != inFlight_.end();) {
         if (iterator->second.visibilityDeadline <= now) {
             if (iterator->second.message.receiveCount >= maxReceiveCount_) {
+                if (eventSink_) {
+                    eventSink_(QueueEventType::DeadLetter, iterator->second.message);
+                }
                 deadLetterMessages_.push_back(std::move(iterator->second.message));
             } else {
+                if (eventSink_) {
+                    eventSink_(QueueEventType::Requeue, iterator->second.message);
+                }
                 availableMessages_.push_back(std::move(iterator->second.message));
                 requeued = true;
             }
@@ -175,6 +196,16 @@ void MessageQueue::removeExpiredDeduplicationEntries(
             ++iterator;
         }
     }
+}
+
+void MessageQueue::restoreAvailable(Message message) {
+    std::lock_guard lock(mutex_);
+    availableMessages_.push_back(std::move(message));
+}
+
+void MessageQueue::restoreDeadLetter(Message message) {
+    std::lock_guard lock(mutex_);
+    deadLetterMessages_.push_back(std::move(message));
 }
 
 void MessageQueue::shutdown() {

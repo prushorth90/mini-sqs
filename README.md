@@ -17,3 +17,13 @@ side effect but fails before acknowledging the message. Consumers must make
 their own processing idempotent, for example by storing processed message IDs
 or using idempotent writes. The broker cannot guarantee that an external side
 effect occurs exactly once.
+
+## Persistence
+
+The backend appends `CREATE`, `PUBLISH`, `RECEIVE`, `ACK`, `REQUEUE`, and `DLQ`
+records to `data/queue.log` and flushes every transition before changing
+in-memory state.
+At startup it replays the log, restoring outstanding messages and dead-letter
+queues. Messages that were in flight when the process stopped become available
+again, preserving at-least-once delivery. Set `MINI_SQS_LOG_PATH` to use a
+different file; Docker Compose stores the default path in a named volume.

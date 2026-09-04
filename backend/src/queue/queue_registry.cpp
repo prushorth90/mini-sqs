@@ -1,18 +1,72 @@
 #include "queue/queue_registry.h"
 
+#include "storage/append_only_log.h"
+
 #include <algorithm>
+#include <utility>
 
 namespace mini_sqs {
+
+QueueRegistry::QueueRegistry(const std::filesystem::path& logPath):
+  log_(std::make_shared<AppendOnlyLog>(logPath)) {
+    for (auto& [queueName, recovered] : log_->replay()) {
+        auto queue = makeQueue(
+            queueName, recovered.maxReceiveCount, recovered.visibilityTimeout);
+        for (auto& message : recovered.availableMessages) {
+            queue->restoreAvailable(std::move(message));
+        }
+        for (auto& message : recovered.deadLetterMessages) {
+            queue->restoreDeadLetter(std::move(message));
+        }
+        queues_.emplace(std::move(queueName), std::move(queue));
+    }
+}
 
 bool QueueRegistry::create(
     std::string_view queueName,
     std::uint32_t maxReceiveCount,
     std::chrono::milliseconds visibilityTimeout) {
     std::lock_guard lock(mutex_);
-    auto [iterator, inserted] = queues_.try_emplace(
-        std::string(queueName),
-        std::make_shared<MessageQueue>(visibilityTimeout, maxReceiveCount));
-    return inserted;
+    std::string name(queueName);
+    if (queues_.contains(name)) {
+        return false;
+    }
+    auto queue = makeQueue(name, maxReceiveCount, visibilityTimeout);
+    if (log_) {
+        log_->recordCreate(name, maxReceiveCount, visibilityTimeout);
+    }
+    queues_.emplace(std::move(name), std::move(queue));
+    return true;
+}
+
+std::shared_ptr<MessageQueue> QueueRegistry::makeQueue(
+    std::string queueName,
+    std::uint32_t maxReceiveCount,
+    std::chrono::milliseconds visibilityTimeout) {
+    QueueEventSink eventSink;
+    if (log_) {
+        eventSink = [log = log_, queueName](QueueEventType type, const Message& message) {
+            switch (type) {
+                case QueueEventType::Publish:
+                    log->recordPublish(queueName, message);
+                    break;
+                case QueueEventType::Receive:
+                    log->recordReceive(queueName, message);
+                    break;
+                case QueueEventType::Acknowledge:
+                    log->recordAcknowledge(queueName, message);
+                    break;
+                case QueueEventType::Requeue:
+                    log->recordRequeue(queueName, message);
+                    break;
+                case QueueEventType::DeadLetter:
+                    log->recordDeadLetter(queueName, message);
+                    break;
+            }
+        };
+    }
+    return std::make_shared<MessageQueue>(
+        visibilityTimeout, maxReceiveCount, std::chrono::minutes(5), std::move(eventSink));
 }
 
 std::shared_ptr<MessageQueue> QueueRegistry::find(std::string_view queueName) const {

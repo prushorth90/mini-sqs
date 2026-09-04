@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -26,12 +27,23 @@ struct PublishResult {
     bool deduplicated;
 };
 
+enum class QueueEventType {
+    Publish,
+    Receive,
+    Acknowledge,
+    Requeue,
+    DeadLetter,
+};
+
+using QueueEventSink = std::function<void(QueueEventType, const Message&)>;
+
 class MessageQueue {
 public:
     explicit MessageQueue(
         std::chrono::milliseconds visibilityTimeout = std::chrono::seconds(30),
         std::uint32_t maxReceiveCount = 5,
-        std::chrono::milliseconds deduplicationWindow = std::chrono::minutes(5));
+        std::chrono::milliseconds deduplicationWindow = std::chrono::minutes(5),
+        QueueEventSink eventSink = {});
     ~MessageQueue();
 
     MessageQueue(const MessageQueue&) = delete;
@@ -44,6 +56,8 @@ public:
     void shutdown();
 
 private:
+    friend class QueueRegistry;
+
     struct InFlightEntry {
         Message message;
         std::chrono::steady_clock::time_point visibilityDeadline;
@@ -58,6 +72,8 @@ private:
     bool requeueExpiredMessages(std::chrono::steady_clock::time_point now);
     std::chrono::steady_clock::time_point nextVisibilityDeadline() const;
     void removeExpiredDeduplicationEntries(std::chrono::steady_clock::time_point now);
+    void restoreAvailable(Message message);
+    void restoreDeadLetter(Message message);
 
     std::deque<Message> availableMessages_;
     std::unordered_map<std::string, InFlightEntry> inFlight_;
@@ -68,6 +84,7 @@ private:
     std::chrono::milliseconds visibilityTimeout_;
     std::chrono::milliseconds deduplicationWindow_;
     std::uint32_t maxReceiveCount_;
+    QueueEventSink eventSink_;
     bool isShuttingDown_{false};
     std::thread reaperThread_;
 };

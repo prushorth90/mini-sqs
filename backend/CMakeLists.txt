@@ -18,6 +18,7 @@ set(CROW_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(Crow)
 
 add_library(mini-sqs-core
+	src/storage/append_only_log.cpp
 	src/queue/id_generator.cpp
 	src/queue/message.cpp
 	src/queue/message_queue.cpp
@@ -53,6 +54,10 @@ if(BUILD_TESTING)
 	add_executable(queue-registry-tests tests/queue_registry_test.cpp)
 	target_link_libraries(queue-registry-tests PRIVATE mini-sqs-core Threads::Threads)
 	add_test(NAME queue-registry-tests COMMAND queue-registry-tests)
+
+	add_executable(persistence-tests tests/persistence_test.cpp)
+	target_link_libraries(persistence-tests PRIVATE mini-sqs-core Threads::Threads)
+	add_test(NAME persistence-tests COMMAND persistence-tests)
 
 	add_executable(message-queue-load-test tests/message_queue_load_test.cpp)
 	target_link_libraries(message-queue-load-test PRIVATE mini-sqs-core Threads::Threads)
