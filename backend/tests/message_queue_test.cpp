@@ -3,8 +3,11 @@
 #include <chrono>
 #include <future>
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -148,6 +151,59 @@ void acknowledgementWinsBeforeVisibilityTimeout() {
             "receipt handle should expire when the message is dead-lettered");
     }
 
+    void deduplicatesConcurrentPublishesByIdempotencyKey() {
+        mini_sqs::MessageQueue queue;
+        constexpr std::size_t producerCount = 24;
+        std::vector<std::thread> producers;
+        std::vector<std::string> returnedMessageIds;
+        std::mutex resultsMutex;
+        producers.reserve(producerCount);
+
+        for (std::size_t index = 0; index < producerCount; ++index) {
+            producers.emplace_back([&queue, &returnedMessageIds, &resultsMutex, index] {
+                const auto result = queue.publish(mini_sqs::Message::create(
+                    "attempt-" + std::to_string(index), "request-123"));
+                std::lock_guard lock(resultsMutex);
+                returnedMessageIds.push_back(result.message.messageId);
+            });
+        }
+        for (auto& producer : producers) {
+            producer.join();
+        }
+
+        expect(returnedMessageIds.size() == producerCount, "every producer should receive a result");
+        expect(std::all_of(
+                   returnedMessageIds.begin(), returnedMessageIds.end(),
+                   [&returnedMessageIds](const std::string& messageId) {
+                       return messageId == returnedMessageIds.front();
+                   }),
+               "concurrent retries should return the original message ID");
+
+        const auto delivery = queue.receive();
+        expect(delivery->message.messageId == returnedMessageIds.front(),
+               "only the original accepted message should be delivered");
+
+        auto extraReceive = std::async(std::launch::async, [&queue] {
+            return queue.receive();
+        });
+        expect(extraReceive.wait_for(50ms) == std::future_status::timeout,
+               "deduplicated retries should not enqueue extra messages");
+        queue.shutdown();
+        expect(!extraReceive.get().has_value(), "shutdown should wake the waiting receiver");
+    }
+
+    void acceptsIdempotencyKeyAgainAfterDeduplicationWindow() {
+        mini_sqs::MessageQueue queue(1s, 5, 20ms);
+        const auto first = queue.publish(mini_sqs::Message::create("first", "reusable-key"));
+        std::this_thread::sleep_for(40ms);
+        const auto second = queue.publish(mini_sqs::Message::create("second", "reusable-key"));
+
+        expect(!first.deduplicated && !second.deduplicated,
+               "expired idempotency key should be accepted as a new message");
+        expect(first.message.messageId != second.message.messageId,
+               "new deduplication window should create a new message ID");
+    }
+
 void wakesBlockedConsumerDuringShutdown() {
     mini_sqs::MessageQueue queue;
     std::promise<void> consumerStarted;
@@ -179,6 +235,8 @@ int main() {
         redeliversAfterVisibilityTimeout();
         acknowledgementWinsBeforeVisibilityTimeout();
         movesMessagesToDeadLetterQueueAfterMaximumReceives();
+        deduplicatesConcurrentPublishesByIdempotencyKey();
+        acceptsIdempotencyKeyAgainAfterDeduplicationWindow();
         wakesBlockedConsumerDuringShutdown();
         std::cout << "message queue tests passed\n";
         return 0;

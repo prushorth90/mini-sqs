@@ -127,8 +127,10 @@ void configureRoutes(QueueApi& app, QueueRegistry& queues) {
         }
 
         auto message = Message::create(payload["body"].s(), std::move(idempotencyKey));
-        queue->publish(message);
-        return jsonResponse(201, messageJson(message));
+        const auto result = queue->publish(std::move(message));
+        auto response = messageJson(result.message);
+        response["deduplicated"] = result.deduplicated;
+        return jsonResponse(result.deduplicated ? 200 : 201, std::move(response));
     });
 
     CROW_ROUTE(app, "/queues/<string>/messages")

@@ -11,14 +11,19 @@ namespace mini_sqs {
 
 MessageQueue::MessageQueue(
         std::chrono::milliseconds visibilityTimeout,
-        std::uint32_t maxReceiveCount):
+        std::uint32_t maxReceiveCount,
+        std::chrono::milliseconds deduplicationWindow):
     visibilityTimeout_(visibilityTimeout),
+    deduplicationWindow_(deduplicationWindow),
     maxReceiveCount_(maxReceiveCount) {
     if (visibilityTimeout_ <= std::chrono::milliseconds::zero()) {
         throw std::invalid_argument("visibility timeout must be positive");
     }
         if (maxReceiveCount_ == 0) {
                 throw std::invalid_argument("maximum receive count must be positive");
+        }
+        if (deduplicationWindow_ <= std::chrono::milliseconds::zero()) {
+            throw std::invalid_argument("deduplication window must be positive");
         }
     reaperThread_ = std::thread(&MessageQueue::reapExpiredMessages, this);
 }
@@ -27,15 +32,38 @@ MessageQueue::~MessageQueue() {
     shutdown();
 }
 
-void MessageQueue::publish(Message message) {
+PublishResult MessageQueue::publish(Message message) {
+    PublishResult result;
     {
         std::lock_guard lock(mutex_);
         if (isShuttingDown_) {
             throw std::logic_error("cannot publish to a queue that is shutting down");
         }
+
+        const auto now = std::chrono::steady_clock::now();
+        removeExpiredDeduplicationEntries(now);
+        if (!message.idempotencyKey.empty()) {
+            const auto existing = deduplicationEntries_.find(message.idempotencyKey);
+            if (existing != deduplicationEntries_.end()) {
+                return PublishResult{
+                    .message = existing->second.message,
+                    .deduplicated = true,
+                };
+            }
+            deduplicationEntries_.emplace(message.idempotencyKey, DeduplicationEntry{
+                .message = message,
+                .expiresAt = now + deduplicationWindow_,
+            });
+        }
+
+        result = PublishResult{
+            .message = message,
+            .deduplicated = false,
+        };
         availableMessages_.push_back(std::move(message));
     }
     condition_.notify_all();
+    return result;
 }
 
 std::optional<Delivery> MessageQueue::receive() {
@@ -136,6 +164,17 @@ std::chrono::steady_clock::time_point MessageQueue::nextVisibilityDeadline() con
         inFlight_.begin(), inFlight_.end(), [](const auto& left, const auto& right) {
             return left.second.visibilityDeadline < right.second.visibilityDeadline;
         })->second.visibilityDeadline;
+}
+
+void MessageQueue::removeExpiredDeduplicationEntries(
+    std::chrono::steady_clock::time_point now) {
+    for (auto iterator = deduplicationEntries_.begin(); iterator != deduplicationEntries_.end();) {
+        if (iterator->second.expiresAt <= now) {
+            iterator = deduplicationEntries_.erase(iterator);
+        } else {
+            ++iterator;
+        }
+    }
 }
 
 void MessageQueue::shutdown() {
