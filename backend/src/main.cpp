@@ -15,6 +15,7 @@ int main() {
         ? configuredLogPath
         : "data/queue.log";
     mini_sqs::QueueRegistry queues(logPath);
+    queues.create("demo-queue");
     mini_sqs::ConsumerSimulator simulator;
     mini_sqs::LoadTestRunner loadTests(queues, simulator);
     mini_sqs::http::QueueApi app;

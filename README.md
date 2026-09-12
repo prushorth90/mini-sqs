@@ -10,6 +10,10 @@ is compiled in a Node build stage and served by a minimal nginx runtime image.
 Browser requests use same-origin `/api` and `/prometheus` paths, which nginx
 proxies to the backend and Prometheus containers respectively.
 
+The backend creates an empty `demo-queue` on startup when it is missing. Select
+it in the sidebar to publish your own messages; existing messages are preserved
+across restarts by the broker's persistence volume.
+
 ## Delivery semantics
 
 Publishing accepts an optional `idempotencyKey`. Within a five-minute window,
