@@ -2,10 +2,14 @@ services:
   backend:
     build:
       context: ./backend
+    environment:
+      MINI_SQS_LOG_PATH: /app/data/queue.log
     ports:
       - "8080:8080"
     volumes:
       - backend-data:/app/data
+    networks:
+      - mini-sqs-network
 
   frontend:
     build:
@@ -15,6 +19,8 @@ services:
     depends_on:
       - backend
       - prometheus
+    networks:
+      - mini-sqs-network
 
   prometheus:
     image: prom/prometheus:v3.5.0
@@ -28,6 +34,11 @@ services:
       - prometheus-data:/prometheus
     depends_on:
       - backend
+    networks:
+      - mini-sqs-network
+
+networks:
+  mini-sqs-network:
 
 volumes:
   backend-data:
