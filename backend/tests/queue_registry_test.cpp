@@ -69,6 +69,17 @@ void handlesConcurrentQueueCreation() {
     expect(queues.list().size() == names.size(), "concurrent creation should not duplicate queues");
 }
 
+void removesQueuesAndAllowsTheirNamesToBeReused() {
+    mini_sqs::QueueRegistry queues;
+    queues.create("temporary");
+    queues.find("temporary")->publish(mini_sqs::Message::create("discarded"));
+
+    expect(queues.remove("temporary"), "existing queue should be removed");
+    expect(!queues.remove("temporary"), "removed queue should not be removed twice");
+    expect(queues.find("temporary") == nullptr, "removed queue should not be found");
+    expect(queues.create("temporary"), "removed queue name should be reusable");
+}
+
 }  // namespace
 
 int main() {
@@ -76,6 +87,7 @@ int main() {
         createsAndListsNamedQueues();
         isolatesMessagesByQueueName();
         handlesConcurrentQueueCreation();
+        removesQueuesAndAllowsTheirNamesToBeReused();
         std::cout << "queue registry tests passed\n";
         return 0;
     } catch (const std::exception& error) {

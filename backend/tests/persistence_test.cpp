@@ -82,6 +82,20 @@ void recoversRetryAndDeadLetterState(const std::filesystem::path& logPath) {
            "dead-letter state should survive restart");
 }
 
+void keepsDeletedQueuesDeletedAfterRestart(const std::filesystem::path& logPath) {
+    {
+        mini_sqs::QueueRegistry queues(logPath);
+        queues.create("temporary");
+        queues.find("temporary")->publish(mini_sqs::Message::create("discarded"));
+        expect(queues.remove("temporary"), "persistent queue should be removed");
+    }
+
+    mini_sqs::QueueRegistry recovered(logPath);
+    expect(recovered.find("temporary") == nullptr,
+           "deleted queue should not be recovered from the log");
+    expect(recovered.create("temporary"), "deleted persistent queue name should be reusable");
+}
+
 }  // namespace
 
 int main() {
@@ -91,6 +105,7 @@ int main() {
     try {
         recoversOutstandingMessages(logPath);
         recoversRetryAndDeadLetterState(logPath);
+        keepsDeletedQueuesDeletedAfterRestart(logPath);
 
         std::ifstream input(logPath);
         const std::string log((std::istreambuf_iterator<char>(input)), {});
@@ -104,6 +119,8 @@ int main() {
              "log should contain REQUEUE records");
          expect(log.find("DLQ\t") != std::string::npos,
              "log should contain DLQ records");
+         expect(log.find("DELETE\t") != std::string::npos,
+             "log should contain DELETE records");
 
         std::filesystem::remove(logPath);
         std::cout << "persistence tests passed\n";

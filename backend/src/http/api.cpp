@@ -119,6 +119,20 @@ void configureRoutes(
         return jsonResponse(200, std::move(body));
     });
 
+    CROW_ROUTE(app, "/queues/<string>")
+        .methods(crow::HTTPMethod::DELETE)
+    ([&queues, &simulator, &loadTests](const std::string& queueName) {
+        if (loadTests.snapshot().config.queueName == queueName) {
+            loadTests.stop();
+        } else if (simulator.snapshot().queueName == queueName) {
+            simulator.stop();
+        }
+        if (!queues.remove(queueName)) {
+            return jsonResponse(404, {{"error", "queue not found"}});
+        }
+        return jsonResponse(200, {{"deleted", true}, {"queue", queueName}});
+    });
+
     CROW_ROUTE(app, "/simulator")
         .methods(crow::HTTPMethod::POST)
     ([&queues, &simulator](const crow::request& request) {
@@ -257,6 +271,8 @@ void configureRoutes(
             {"completed", state.completed},
             {"retried", state.retried},
             {"deadLettered", state.deadLettered},
+            {"currentThroughput", state.currentThroughput},
+            {"averageThroughput", state.averageThroughput},
             {"peakThroughput", state.peakThroughput},
             {"durationMs", state.durationMs},
             {"error", state.error},
@@ -296,6 +312,25 @@ void configureRoutes(
         auto response = messageJson(result.message);
         response["deduplicated"] = result.deduplicated;
         return jsonResponse(result.deduplicated ? 200 : 201, std::move(response));
+    });
+
+    CROW_ROUTE(app, "/queues/<string>/metrics")
+        .methods(crow::HTTPMethod::GET)
+    ([&queues](const std::string& queueName) {
+        if (!queues.find(queueName)) {
+            return jsonResponse(404, {{"error", "queue not found"}});
+        }
+        const auto metrics = queues.metrics()->snapshot(queueName);
+        return jsonResponse(200, {
+            {"queueDepth", static_cast<std::uint64_t>(metrics.depth)},
+            {"inFlight", static_cast<std::uint64_t>(metrics.inFlight)},
+            {"retried", metrics.retried},
+            {"deadLettered", metrics.deadLettered},
+            {"currentThroughput", metrics.currentThroughput},
+            {"averageThroughput", metrics.averageThroughput},
+            {"peakThroughput", metrics.peakThroughput},
+            {"p95Latency", metrics.p95ProcessingLatencySeconds},
+        });
     });
 
     CROW_ROUTE(app, "/queues/<string>/messages")

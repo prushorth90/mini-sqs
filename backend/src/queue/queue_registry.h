@@ -26,6 +26,7 @@ public:
         std::string_view queueName,
         std::uint32_t maxReceiveCount = 5,
         std::chrono::milliseconds visibilityTimeout = std::chrono::seconds(30));
+    bool remove(std::string_view queueName);
     std::shared_ptr<MessageQueue> find(std::string_view queueName) const;
     std::vector<std::string> list() const;
     std::shared_ptr<MetricsRegistry> metrics() const;

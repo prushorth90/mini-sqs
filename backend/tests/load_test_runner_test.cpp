@@ -56,6 +56,8 @@ void processesOneThousandMessagesWithConcurrentProducers() {
     expect(result.completed == 1'000, "all messages should be acknowledged");
     expect(result.retried == 0 && result.deadLettered == 0,
            "successful consumers should not retry or dead-letter messages");
+        expect(result.averageThroughput > 0,
+            "load result should preserve average ACK throughput");
     expect(result.peakThroughput > 0, "load test should measure peak throughput");
 }
 

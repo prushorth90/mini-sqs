@@ -43,7 +43,34 @@ void exposesQueueMetricsSnapshot() {
            "snapshot should include current gauges");
     expect(snapshot.p95ProcessingLatencySeconds == 0.025,
            "snapshot should include processing latency P95");
+        expect(snapshot.currentThroughput == 1,
+            "snapshot should count ACKs in the one-second throughput window");
 }
+
+    void currentThroughputReturnsToZeroWhileAveragePersists() {
+        mini_sqs::MetricsRegistry metrics;
+        metrics.queueCreated("throughput", 0, 0);
+        metrics.messageAcknowledged("throughput", 1ms, 0, 0);
+        std::this_thread::sleep_for(10ms);
+        metrics.messageAcknowledged("throughput", 1ms, 0, 0);
+
+        const auto active = metrics.snapshot("throughput");
+        expect(active.currentThroughput == 2,
+            "current throughput should use actual recent ACK timestamps");
+        expect(active.averageThroughput > 0,
+            "average throughput should use the full ACK timestamp span");
+            expect(active.peakThroughput == 2,
+                "peak throughput should preserve the highest rolling ACK rate");
+
+        std::this_thread::sleep_for(1050ms);
+        const auto idle = metrics.snapshot("throughput");
+        expect(idle.currentThroughput == 0,
+            "current throughput should return to zero after one idle window");
+        expect(idle.averageThroughput == active.averageThroughput,
+            "average throughput should remain after the queue becomes idle");
+            expect(idle.peakThroughput == active.peakThroughput,
+                "peak throughput should remain after the queue becomes idle");
+    }
 
 }  // namespace
 
@@ -69,12 +96,14 @@ int main() {
 
         const auto output = metrics->prometheusText();
         exposesQueueMetricsSnapshot();
+        currentThroughputReturnsToZeroWhileAveragePersists();
         expectContains(output, "messages_published_total{queue=\"orders\"} 2");
         expectContains(output, "messages_acked_total{queue=\"orders\"} 1");
         expectContains(output, "messages_retried_total{queue=\"orders\"} 1");
         expectContains(output, "messages_dlq_total{queue=\"orders\"} 1");
         expectContains(output, "queue_depth{queue=\"orders\"} 0");
         expectContains(output, "messages_in_flight{queue=\"orders\"} 0");
+        expectContains(output, "messages_completed_per_second{queue=\"orders\"} 1");
         expectContains(output, "message_wait_time_seconds{queue=\"orders\",quantile=\"0.5\"}");
         expectContains(output, "message_wait_time_seconds_count{queue=\"orders\"} 3");
         expectContains(output, "message_processing_latency_seconds{queue=\"orders\",quantile=\"0.95\"}");

@@ -19,12 +19,18 @@ button { font: inherit; }
 .sidebar-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 10px 9px; color: #9eaaa3; font: 500 0.68rem/1.4 'DM Mono', monospace; text-transform: uppercase; }
 .queue-count { color: #19231e; background: #a9b5ae; border-radius: 10px; padding: 1px 7px; }
 .sidebar nav { display: grid; gap: 3px; overflow-y: auto; }
-.queue-button { width: 100%; min-height: 42px; display: flex; align-items: center; gap: 10px; border: 0; border-radius: 5px; padding: 8px 10px; color: #c6cec9; background: transparent; cursor: pointer; text-align: left; overflow: hidden; }
+.queue-row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 34px; align-items: center; border-radius: 5px; }
+.queue-row:hover { background: #26332c; }
+.queue-row.active { background: #314139; }
+.queue-button { width: 100%; min-width: 0; min-height: 42px; display: flex; align-items: center; gap: 10px; border: 0; border-radius: 5px; padding: 8px 10px; color: #c6cec9; background: transparent; cursor: pointer; text-align: left; overflow: hidden; }
 .queue-button span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.queue-button:hover { color: #fff; background: #26332c; }
-.queue-button.active { color: #fff; background: #314139; }
+.queue-button:hover, .queue-row.active .queue-button { color: #fff; }
 .queue-indicator { width: 7px; height: 7px; flex: 0 0 7px; border: 1px solid #7b8981; border-radius: 50%; }
-.queue-button.active .queue-indicator { border-color: #f2c14e; background: #f2c14e; }
+.queue-row.active .queue-indicator { border-color: #f2c14e; background: #f2c14e; }
+.delete-queue-button { width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 4px; color: #8f9b94; background: transparent; cursor: pointer; opacity: 0; }
+.queue-row:hover .delete-queue-button, .delete-queue-button:focus-visible { opacity: 1; }
+.delete-queue-button:hover { color: #ffd8d1; background: #6a342d; }
+.delete-queue-button:disabled { cursor: wait; opacity: 0.45; }
 .empty-sidebar { padding: 8px 10px; color: #7f8c84; font-size: 0.75rem; }
 .connection { margin-top: auto; padding: 16px 10px 0; border-top: 1px solid #334038; color: #aeb8b2; font: 400 0.68rem/1.4 'DM Mono', monospace; }
 .connection span { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #5ec28a; box-shadow: 0 0 0 3px rgba(94, 194, 138, 0.14); }
@@ -43,7 +49,7 @@ h1 { margin: 0; font-size: clamp(2rem, 4vw, 3.25rem); line-height: 1; letter-spa
 @keyframes spin { to { transform: rotate(360deg); } }
 .error-banner { max-width: 1320px; margin: -10px auto 22px; border-left: 3px solid #bd4b38; padding: 10px 14px; color: #7c2f23; background: #f8e9e5; font-size: 0.8rem; }
 
-.metric-grid { max-width: 1320px; margin: 0 auto 32px; display: grid; grid-template-columns: repeat(6, minmax(130px, 1fr)); gap: 10px; }
+.metric-grid { max-width: 1320px; margin: 0 auto 32px; display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; }
 .metric-card { min-width: 0; min-height: 118px; padding: 17px; border: 1px solid #d9ddd6; border-radius: 6px; background: rgba(255, 255, 252, 0.92); box-shadow: 0 2px 8px rgba(28, 36, 32, 0.035); }
 .metric-card:nth-child(4) { border-top: 3px solid #bd4b38; }
 .metric-label { display: flex; align-items: center; gap: 7px; min-height: 20px; color: #6d7972; font-size: 0.7rem; white-space: nowrap; }
@@ -127,14 +133,14 @@ td code { display: inline-block; min-width: 82px; color: #27342d; font: 500 0.75
 .wide-field { grid-column: 1 / -1; }
 .load-progress { height: 5px; background: #e8ebe6; overflow: hidden; }
 .load-progress span { display: block; height: 100%; background: #45ad73; transition: width 200ms ease; }
-.result-grid { display: grid; grid-template-columns: repeat(3, 1fr); }
+.result-grid { display: grid; grid-template-columns: repeat(4, 1fr); }
 .result-grid article { min-width: 0; min-height: 112px; padding: 20px; border-right: 1px solid #e5e8e3; border-bottom: 1px solid #e5e8e3; }
-.result-grid article:nth-child(3n) { border-right: 0; }
+.result-grid article:nth-child(4n), .result-grid article:last-child { border-right: 0; }
 .result-grid article:nth-last-child(-n + 3) { border-bottom: 0; }
 .result-grid span { display: block; color: #758179; font-size: 0.68rem; }
 .result-grid strong { display: block; margin-top: 18px; font: 500 1.35rem/1 'DM Mono', monospace; overflow-wrap: anywhere; }
 .load-error { margin: 0; border-top: 1px solid #edc9c2; padding: 12px 20px; color: #873829; background: #f9ebe8; font-size: 0.72rem; }
-.load-metrics { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(6, minmax(130px, 1fr)); gap: 10px; }
+.load-metrics { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; }
 
 @media (max-width: 1100px) {
   .metric-grid { grid-template-columns: repeat(3, 1fr); }
@@ -151,7 +157,8 @@ td code { display: inline-block; min-width: 82px; color: #27342d; font: 500 0.75
   .brand { padding-bottom: 18px; }
   .view-switcher { grid-template-columns: repeat(3, 1fr); margin-bottom: 18px; }
   .sidebar nav { display: flex; overflow-x: auto; padding-bottom: 4px; }
-  .queue-button { width: auto; flex: 0 0 auto; }
+  .queue-row { flex: 0 0 auto; grid-template-columns: minmax(100px, auto) 34px; }
+  .delete-queue-button { opacity: 1; }
   .connection { display: none; }
   .workspace { padding: 28px 16px 40px; }
   .workspace-header { align-items: flex-start; }
@@ -170,7 +177,7 @@ td code { display: inline-block; min-width: 82px; color: #27342d; font: 500 0.75
   .load-test-form { grid-template-columns: 1fr; }
   .wide-field { grid-column: auto; }
   .result-grid { grid-template-columns: 1fr 1fr; }
-  .result-grid article:nth-child(3n) { border-right: 1px solid #e5e8e3; }
+  .result-grid article:nth-child(4n) { border-right: 1px solid #e5e8e3; }
   .result-grid article:nth-child(even) { border-right: 0; }
   .result-grid article:nth-last-child(-n + 3) { border-bottom: 1px solid #e5e8e3; }
   .result-grid article:nth-last-child(-n + 2) { border-bottom: 0; }

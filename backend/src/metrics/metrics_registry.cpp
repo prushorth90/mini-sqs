@@ -10,6 +10,8 @@
 namespace mini_sqs {
 namespace {
 
+constexpr auto throughputWindow = std::chrono::seconds(1);
+
 std::string escapeLabel(std::string_view value) {
     std::string escaped;
     for (const char character : value) {
@@ -66,6 +68,11 @@ void MetricsRegistry::queueCreated(
     setGauges(queues_[std::string(queueName)], depth, inFlight);
 }
 
+void MetricsRegistry::queueDeleted(std::string_view queueName) {
+    std::lock_guard lock(mutex_);
+    queues_.erase(std::string(queueName));
+}
+
 void MetricsRegistry::messagePublished(
     std::string_view queueName,
     std::size_t depth,
@@ -94,8 +101,20 @@ void MetricsRegistry::messageAcknowledged(
     std::size_t inFlight) {
     std::lock_guard lock(mutex_);
     auto& metrics = queues_[std::string(queueName)];
+    const auto acknowledgedAt = std::chrono::steady_clock::now();
     ++metrics.acknowledged;
     metrics.processingLatencies.push_back(processingLatency.count());
+    metrics.acknowledgementTimes.push_back(acknowledgedAt);
+    metrics.firstAcknowledgedAt = metrics.firstAcknowledgedAt.value_or(acknowledgedAt);
+    metrics.lastAcknowledgedAt = acknowledgedAt;
+    while (!metrics.acknowledgementTimes.empty()
+           && metrics.acknowledgementTimes.front() < acknowledgedAt - throughputWindow) {
+        metrics.acknowledgementTimes.pop_front();
+    }
+    metrics.peakThroughput = std::max(
+        metrics.peakThroughput,
+        static_cast<double>(metrics.acknowledgementTimes.size())
+            / std::chrono::duration<double>(throughputWindow).count());
     setGauges(metrics, depth, inFlight);
 }
 
@@ -129,6 +148,21 @@ QueueMetricsSnapshot MetricsRegistry::snapshot(
         return {};
     }
     const auto& metrics = iterator->second;
+    const auto cutoff = std::chrono::steady_clock::now() - throughputWindow;
+    const auto recentAcknowledgements = std::count_if(
+        metrics.acknowledgementTimes.begin(),
+        metrics.acknowledgementTimes.end(),
+        [cutoff](const auto acknowledgedAt) { return acknowledgedAt >= cutoff; });
+    const double currentThroughput = static_cast<double>(recentAcknowledgements)
+        / std::chrono::duration<double>(throughputWindow).count();
+    double averageThroughput = 0;
+    if (metrics.firstAcknowledgedAt && metrics.lastAcknowledgedAt) {
+        const double elapsed = std::chrono::duration<double>(
+            *metrics.lastAcknowledgedAt - *metrics.firstAcknowledgedAt).count();
+        if (elapsed > 0) {
+            averageThroughput = static_cast<double>(metrics.acknowledged) / elapsed;
+        }
+    }
     double p95ProcessingLatencySeconds = 0;
     if (includeLatency) {
         auto processingLatencies = metrics.processingLatencies;
@@ -142,6 +176,9 @@ QueueMetricsSnapshot MetricsRegistry::snapshot(
         .deadLettered = metrics.deadLettered,
         .depth = metrics.depth,
         .inFlight = metrics.inFlight,
+        .currentThroughput = currentThroughput,
+        .averageThroughput = averageThroughput,
+        .peakThroughput = metrics.peakThroughput,
         .p95ProcessingLatencySeconds = p95ProcessingLatencySeconds,
     };
 }
@@ -170,18 +207,27 @@ std::string MetricsRegistry::prometheusText() const {
             << "# TYPE queue_depth gauge\n"
             << "# HELP messages_in_flight Messages awaiting acknowledgement.\n"
             << "# TYPE messages_in_flight gauge\n"
+            << "# HELP messages_completed_per_second Messages acknowledged in the last second.\n"
+            << "# TYPE messages_completed_per_second gauge\n"
             << "# HELP message_wait_time_seconds Time from publication to delivery.\n"
             << "# TYPE message_wait_time_seconds summary\n"
             << "# HELP message_processing_latency_seconds Time from delivery to acknowledgement.\n"
             << "# TYPE message_processing_latency_seconds summary\n";
     for (const auto& [queueName, metrics] : snapshot) {
         const auto label = "{queue=\"" + escapeLabel(queueName) + "\"}";
+        const auto cutoff = std::chrono::steady_clock::now() - throughputWindow;
+        const auto recentAcknowledgements = std::count_if(
+            metrics.acknowledgementTimes.begin(),
+            metrics.acknowledgementTimes.end(),
+            [cutoff](const auto acknowledgedAt) { return acknowledgedAt >= cutoff; });
          output << "messages_published_total" << label << ' ' << metrics.published << '\n'
              << "messages_acked_total" << label << ' ' << metrics.acknowledged << '\n'
              << "messages_retried_total" << label << ' ' << metrics.retried << '\n'
              << "messages_dlq_total" << label << ' ' << metrics.deadLettered << '\n'
              << "queue_depth" << label << ' ' << metrics.depth << '\n'
-               << "messages_in_flight" << label << ' ' << metrics.inFlight << '\n';
+                         << "messages_in_flight" << label << ' ' << metrics.inFlight << '\n'
+                         << "messages_completed_per_second" << label << ' '
+                         << recentAcknowledgements << '\n';
          writeSummary(output, "message_wait_time_seconds", queueName, metrics.waitTimes);
          writeSummary(output, "message_processing_latency_seconds", queueName,
                      metrics.processingLatencies);

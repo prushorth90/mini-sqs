@@ -105,6 +105,10 @@ void AppendOnlyLog::recordCreate(
         + '\t' + std::to_string(visibilityTimeout.count()));
 }
 
+void AppendOnlyLog::recordDelete(std::string_view queueName) {
+    append("DELETE\t" + hexEncode(queueName));
+}
+
 void AppendOnlyLog::recordPublish(std::string_view queueName, const Message& message) {
     append(serializeMessage("PUBLISH", queueName, message));
 }
@@ -167,13 +171,21 @@ std::unordered_map<std::string, RecoveredQueue> AppendOnlyLog::replay() const {
             continue;
         }
 
+        if (type == "DELETE") {
+            if (fields.size() != 2) {
+                throw std::runtime_error("invalid DELETE record in queue log");
+            }
+            states.erase(hexDecode(fields[1]));
+            continue;
+        }
+
         if (fields.size() < 3) {
             throw std::runtime_error("invalid record in queue log");
         }
         const std::string queueName = hexDecode(fields[1]);
         auto state = states.find(queueName);
         if (state == states.end()) {
-            throw std::runtime_error("queue event precedes CREATE record");
+            continue;
         }
         const std::string messageId = hexDecode(fields[2]);
         if (type == "PUBLISH") {

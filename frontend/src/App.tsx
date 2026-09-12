@@ -13,13 +13,13 @@ import {
   Send,
   Square,
   Timer,
+  Trash2,
   TriangleAlert,
   Users,
 } from 'lucide-react'
 import './App.css'
 
 const apiBase = import.meta.env.VITE_API_URL ?? '/api'
-const prometheusBase = import.meta.env.VITE_PROMETHEUS_URL ?? '/prometheus'
 
 type MessageStatus = 'available' | 'in-flight' | 'dead-letter'
 
@@ -36,7 +36,20 @@ type DashboardMetrics = {
   inFlight: number
   retries: number
   dlqSize: number
-  throughput: number
+  currentThroughput: number
+  averageThroughput: number
+  peakThroughput: number
+  p95Latency: number
+}
+
+type BrokerMetrics = {
+  queueDepth: number
+  inFlight: number
+  retried: number
+  deadLettered: number
+  currentThroughput: number
+  averageThroughput: number
+  peakThroughput: number
   p95Latency: number
 }
 
@@ -65,6 +78,8 @@ type LoadTestState = {
   completed: number
   retried: number
   deadLettered: number
+  currentThroughput: number
+  averageThroughput: number
   peakThroughput: number
   durationMs: number
   error: string
@@ -75,7 +90,9 @@ const emptyMetrics: DashboardMetrics = {
   inFlight: 0,
   retries: 0,
   dlqSize: 0,
-  throughput: 0,
+  currentThroughput: 0,
+  averageThroughput: 0,
+  peakThroughput: 0,
   p95Latency: 0,
 }
 
@@ -104,6 +121,8 @@ const emptyLoadTest: LoadTestState = {
   completed: 0,
   retried: 0,
   deadLettered: 0,
+  currentThroughput: 0,
+  averageThroughput: 0,
   peakThroughput: 0,
   durationMs: 0,
   error: '',
@@ -113,19 +132,6 @@ async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url)
   if (!response.ok) throw new Error(`Request failed with status ${response.status}`)
   return response.json() as Promise<T>
-}
-
-async function queryMetric(query: string): Promise<number> {
-  const url = new URL(`${prometheusBase.replace(/\/$/, '')}/api/v1/query`, globalThis.location.origin)
-  url.searchParams.set('query', query)
-  const response = await fetchJson<{
-    data: { result: Array<{ value: [number, string] }> }
-  }>(url.toString())
-  return Number(response.data.result[0]?.value[1] ?? 0)
-}
-
-function queueMetric(name: string, queue: string) {
-  return `${name}{queue="${queue}"}`
 }
 
 function formatAge(createdAt: number) {
@@ -157,6 +163,7 @@ export default function App() {
   const [idempotencyKey, setIdempotencyKey] = useState('')
   const [publishing, setPublishing] = useState(false)
   const [publishFeedback, setPublishFeedback] = useState('')
+  const [deletingQueue, setDeletingQueue] = useState('')
   const [consumerCount, setConsumerCount] = useState(20)
   const [processingDelayMs, setProcessingDelayMs] = useState(500)
   const [failurePercent, setFailurePercent] = useState(10)
@@ -195,26 +202,21 @@ export default function App() {
     setRefreshing(true)
     try {
       const encodedQueue = encodeURIComponent(queue)
-      const [recent, queueDepth, inFlight, retries, dlqSize, throughput, p95Latency] =
+      const [recent, brokerMetrics] =
         await Promise.all([
           fetchJson<{ messages: Message[] }>(`${apiBase}/queues/${encodedQueue}/messages/recent`),
-          queryMetric(queueMetric('queue_depth', queue)),
-          queryMetric(queueMetric('messages_in_flight', queue)),
-          queryMetric(queueMetric('messages_retried_total', queue)),
-          queryMetric(queueMetric('messages_dlq_total', queue)),
-          queryMetric(`rate(messages_published_total{queue="${queue}"}[1m])`),
-          queryMetric(
-            `message_processing_latency_seconds{queue="${queue}",quantile="0.95"}`,
-          ),
+          fetchJson<BrokerMetrics>(`${apiBase}/queues/${encodedQueue}/metrics`),
         ])
       setMessages(recent.messages)
       setMetrics({
-        queueDepth,
-        inFlight,
-        retries,
-        dlqSize,
-        throughput,
-        p95Latency,
+        queueDepth: brokerMetrics.queueDepth,
+        inFlight: brokerMetrics.inFlight,
+        retries: brokerMetrics.retried,
+        dlqSize: brokerMetrics.deadLettered,
+        currentThroughput: brokerMetrics.currentThroughput,
+        averageThroughput: brokerMetrics.averageThroughput,
+        peakThroughput: brokerMetrics.peakThroughput,
+        p95Latency: brokerMetrics.p95Latency,
       })
       setError('')
       setLastUpdated(new Date())
@@ -261,6 +263,25 @@ export default function App() {
       )
     } finally {
       setPublishing(false)
+    }
+  }
+
+  async function handleDeleteQueue(queue: string) {
+    if (!globalThis.confirm(`Delete queue "${queue}" and all of its messages?`)) return
+
+    setDeletingQueue(queue)
+    try {
+      const response = await fetch(`${apiBase}/queues/${encodeURIComponent(queue)}`, {
+        method: 'DELETE',
+      })
+      if (!response.ok) throw new Error(`Delete failed with status ${response.status}`)
+      await loadQueues()
+      setView('dashboard')
+      setError('')
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to delete queue')
+    } finally {
+      setDeletingQueue('')
     }
   }
 
@@ -325,16 +346,19 @@ export default function App() {
       setLoadMetrics(emptyMetrics)
       return
     }
-    const [queueDepth, inFlight, retries, dlqSize, throughput, p95Latency] =
-      await Promise.all([
-        queryMetric(queueMetric('queue_depth', queue)),
-        queryMetric(queueMetric('messages_in_flight', queue)),
-        queryMetric(queueMetric('messages_retried_total', queue)),
-        queryMetric(queueMetric('messages_dlq_total', queue)),
-        queryMetric(`rate(messages_published_total{queue="${queue}"}[1m])`),
-        queryMetric(`message_processing_latency_seconds{queue="${queue}",quantile="0.95"}`),
-      ])
-    setLoadMetrics({ queueDepth, inFlight, retries, dlqSize, throughput, p95Latency })
+    const metrics = await fetchJson<BrokerMetrics>(
+      `${apiBase}/queues/${encodeURIComponent(queue)}/metrics`,
+    )
+    setLoadMetrics({
+      queueDepth: metrics.queueDepth,
+      inFlight: metrics.inFlight,
+      retries: metrics.retried,
+      dlqSize: metrics.deadLettered,
+      currentThroughput: metrics.currentThroughput,
+      averageThroughput: metrics.averageThroughput,
+      peakThroughput: metrics.peakThroughput,
+      p95Latency: metrics.p95Latency,
+    })
   }
 
   async function handleStartLoadTest(event: FormEvent<HTMLFormElement>) {
@@ -420,7 +444,7 @@ export default function App() {
   useEffect(() => {
     selectedQueueRef.current = selectedQueue
     void loadQueue(selectedQueue)
-    const interval = window.setInterval(() => void loadQueue(selectedQueue, true), 5000)
+    const interval = window.setInterval(() => void loadQueue(selectedQueue, true), 1000)
     return () => window.clearInterval(interval)
   }, [selectedQueue])
 
@@ -435,7 +459,9 @@ export default function App() {
     { label: 'In flight', value: metrics.inFlight.toLocaleString(), icon: Activity },
     { label: 'Retries', value: metrics.retries.toLocaleString(), icon: RotateCcw },
     { label: 'DLQ size', value: metrics.dlqSize.toLocaleString(), icon: TriangleAlert },
-    { label: 'Throughput', value: `${metrics.throughput.toFixed(2)}/s`, icon: Gauge },
+    { label: 'Current throughput', value: `${metrics.currentThroughput.toFixed(0)}/s`, icon: Gauge },
+    { label: 'Average throughput', value: `${metrics.averageThroughput.toFixed(0)}/s`, icon: Activity },
+    { label: 'Peak throughput', value: `${metrics.peakThroughput.toFixed(0)}/s`, icon: Gauge },
     { label: 'P95 latency', value: formatLatency(metrics.p95Latency), icon: Clock3 },
   ]
 
@@ -444,7 +470,9 @@ export default function App() {
     { label: 'In flight', value: loadMetrics.inFlight.toLocaleString(), icon: Activity },
     { label: 'Retries', value: loadMetrics.retries.toLocaleString(), icon: RotateCcw },
     { label: 'DLQ size', value: loadMetrics.dlqSize.toLocaleString(), icon: TriangleAlert },
-    { label: 'Throughput', value: `${loadMetrics.throughput.toFixed(2)}/s`, icon: Gauge },
+    { label: 'Current throughput', value: `${loadMetrics.currentThroughput.toFixed(0)}/s`, icon: Gauge },
+    { label: 'Average throughput', value: `${loadMetrics.averageThroughput.toFixed(0)}/s`, icon: Activity },
+    { label: 'Peak throughput', value: `${loadMetrics.peakThroughput.toFixed(0)}/s`, icon: Gauge },
     { label: 'P95 latency', value: formatLatency(loadMetrics.p95Latency), icon: Clock3 },
   ]
 
@@ -483,14 +511,28 @@ export default function App() {
         </div>
         <nav aria-label="Queues">
           {queues.map((queue) => (
-            <button
-              className={queue === selectedQueue ? 'queue-button active' : 'queue-button'}
-              key={queue}
-              onClick={() => setSelectedQueue(queue)}
-              type="button"
-            >
-              <span className="queue-indicator" /><span>{queue}</span>
-            </button>
+            <div className={queue === selectedQueue ? 'queue-row active' : 'queue-row'} key={queue}>
+              <button
+                className="queue-button"
+                onClick={() => {
+                  setSelectedQueue(queue)
+                  setView('dashboard')
+                }}
+                type="button"
+              >
+                <span className="queue-indicator" /><span>{queue}</span>
+              </button>
+              <button
+                aria-label={`Delete ${queue}`}
+                className="delete-queue-button"
+                disabled={deletingQueue === queue}
+                onClick={() => void handleDeleteQueue(queue)}
+                title={`Delete ${queue}`}
+                type="button"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
           ))}
           {!loading && queues.length === 0 && <p className="empty-sidebar">No queues yet</p>}
         </nav>
@@ -733,6 +775,7 @@ export default function App() {
               <article><span>Completed (ACK)</span><strong>{loadTest.completed.toLocaleString()}</strong></article>
               <article><span>Retried</span><strong>{loadTest.retried.toLocaleString()}</strong></article>
               <article><span>DLQed</span><strong>{loadTest.deadLettered.toLocaleString()}</strong></article>
+              <article><span>Average throughput</span><strong>{loadTest.averageThroughput.toFixed(0)}/s</strong></article>
               <article><span>Peak throughput</span><strong>{loadTest.peakThroughput.toFixed(0)}/s</strong></article>
               <article><span>Duration</span><strong>{(loadTest.durationMs / 1000).toFixed(2)}s</strong></article>
             </div>

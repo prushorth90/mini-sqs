@@ -29,6 +29,8 @@ struct LoadTestSnapshot {
     std::uint64_t completed;
     std::uint64_t retried;
     std::uint64_t deadLettered;
+    double currentThroughput;
+    double averageThroughput;
     double peakThroughput;
     std::uint64_t durationMs;
     std::string error;

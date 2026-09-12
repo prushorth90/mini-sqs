@@ -28,6 +28,7 @@ public:
         std::string_view queueName,
         std::uint32_t maxReceiveCount,
         std::chrono::milliseconds visibilityTimeout);
+    void recordDelete(std::string_view queueName);
     void recordPublish(std::string_view queueName, const Message& message);
     void recordReceive(std::string_view queueName, const Message& message);
     void recordAcknowledge(std::string_view queueName, const Message& message);

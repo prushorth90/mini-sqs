@@ -80,10 +80,14 @@ or moves it to the DLQ once the maximum receive count is reached. Old receipt
 handles cannot acknowledge a later delivery.
 
 Results are derived from actual broker transitions, not frontend estimates:
-published, acknowledged, retried, dead-lettered, peak publish throughput, and
-duration. The adjacent dashboard metrics come from Prometheus and show queue
-depth, in-flight deliveries, retries, DLQ size, publish rate, and P95 processing
-latency for the same load queue.
+published, acknowledged, retried, dead-lettered, average throughput, peak
+throughput, and duration. Throughput uses acknowledgement timestamps recorded
+by the C++ broker. Current throughput is the rolling ACK rate over the previous
+second and returns to zero after one idle second. Average throughput is total
+ACKs divided by the first-to-last ACK span, while peak throughput is the highest
+rolling ACK rate observed during the run; average and peak remain available
+after completion. The adjacent metrics also show queue depth, in-flight
+deliveries, retries, DLQ size, and P95 processing latency for the same queue.
 
 The load API is `POST /load-tests` to start, `GET /load-tests` for live results,
 and `DELETE /load-tests` to stop. A start request has this shape:

@@ -3,7 +3,9 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -18,12 +20,16 @@ struct QueueMetricsSnapshot {
     std::uint64_t deadLettered;
     std::size_t depth;
     std::size_t inFlight;
+    double currentThroughput;
+    double averageThroughput;
+    double peakThroughput;
     double p95ProcessingLatencySeconds;
 };
 
 class MetricsRegistry {
 public:
     void queueCreated(std::string_view queueName, std::size_t depth, std::size_t inFlight);
+    void queueDeleted(std::string_view queueName);
     void messagePublished(std::string_view queueName, std::size_t depth, std::size_t inFlight);
     void messageReceived(
         std::string_view queueName,
@@ -59,6 +65,10 @@ private:
         std::size_t inFlight{0};
         std::vector<double> waitTimes;
         std::vector<double> processingLatencies;
+        std::deque<std::chrono::steady_clock::time_point> acknowledgementTimes;
+        std::optional<std::chrono::steady_clock::time_point> firstAcknowledgedAt;
+        std::optional<std::chrono::steady_clock::time_point> lastAcknowledgedAt;
+        double peakThroughput{0};
     };
 
     static void setGauges(QueueMetrics& metrics, std::size_t depth, std::size_t inFlight);

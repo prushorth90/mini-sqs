@@ -107,7 +107,9 @@ LoadTestSnapshot LoadTestRunner::snapshot() const {
         .completed = metrics.acknowledged,
         .retried = metrics.retried,
         .deadLettered = metrics.deadLettered,
-        .peakThroughput = peakThroughput,
+        .currentThroughput = metrics.currentThroughput,
+        .averageThroughput = metrics.averageThroughput,
+        .peakThroughput = std::max(peakThroughput, metrics.peakThroughput),
         .durationMs = static_cast<std::uint64_t>(std::max(duration.count(), std::int64_t{0})),
         .error = std::move(error),
     };
@@ -144,19 +146,13 @@ void LoadTestRunner::run(
         });
     }
 
-    auto sampledAt = std::chrono::steady_clock::now();
-    std::uint64_t previousOperations = 0;
     while (!stopToken.stop_requested()) {
         const auto metrics = queues_.metrics()->snapshot(config.queueName, false);
         const auto published = published_.load(std::memory_order_relaxed);
         const auto now = std::chrono::steady_clock::now();
-        const double seconds = std::chrono::duration<double>(now - sampledAt).count();
-        if (seconds >= 0.05) {
+        if (metrics.currentThroughput > 0) {
             std::lock_guard lock(mutex_);
-            peakThroughput_ = std::max(
-                peakThroughput_, static_cast<double>(published - previousOperations) / seconds);
-            sampledAt = now;
-            previousOperations = published;
+            peakThroughput_ = std::max(peakThroughput_, metrics.currentThroughput);
         }
 
         if (activeProducers.load(std::memory_order_relaxed) == 0) {

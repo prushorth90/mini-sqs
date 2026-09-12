@@ -46,6 +46,21 @@ bool QueueRegistry::create(
     return true;
 }
 
+bool QueueRegistry::remove(std::string_view queueName) {
+    std::lock_guard lock(mutex_);
+    const auto iterator = queues_.find(std::string(queueName));
+    if (iterator == queues_.end()) {
+        return false;
+    }
+    iterator->second->shutdown();
+    if (log_) {
+        log_->recordDelete(queueName);
+    }
+    queues_.erase(iterator);
+    metrics_->queueDeleted(queueName);
+    return true;
+}
+
 std::shared_ptr<MessageQueue> QueueRegistry::makeQueue(
     std::string queueName,
     std::uint32_t maxReceiveCount,
