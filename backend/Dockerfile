@@ -14,4 +14,4 @@ FROM debian:trixie-slim
 WORKDIR /app
 COPY --from=build /app/build/mini-sqs ./mini-sqs
 EXPOSE 8080
-CMD ["./mini-sqs"]
+ENTRYPOINT ["./mini-sqs"]
