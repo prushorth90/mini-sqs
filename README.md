@@ -63,3 +63,40 @@ at a time, and starting another configuration replaces the current run.
 
 The simulator API is `POST /simulator` to start or replace a run,
 `GET /simulator` for live counters, and `DELETE /simulator` to stop it.
+
+## Load and stress testing
+
+Select **Load test** in the dashboard to create a fresh queue and publish from
+1,000 to 50,000 messages through concurrent C++ producer threads. Each run
+configures its producer and consumer counts, processing delay, failure
+probability, visibility timeout, and maximum receive count. Queue names must be
+unique because load queues use the broker's normal persistent registry.
+
+The load runner starts the existing consumer simulator against that queue. A
+failed processing attempt does not acknowledge its receipt handle. The message
+remains in flight until its configured visibility timeout, then the broker
+either requeues it with an incremented receive count and a new receipt handle,
+or moves it to the DLQ once the maximum receive count is reached. Old receipt
+handles cannot acknowledge a later delivery.
+
+Results are derived from actual broker transitions, not frontend estimates:
+published, acknowledged, retried, dead-lettered, peak publish throughput, and
+duration. The adjacent dashboard metrics come from Prometheus and show queue
+depth, in-flight deliveries, retries, DLQ size, publish rate, and P95 processing
+latency for the same load queue.
+
+The load API is `POST /load-tests` to start, `GET /load-tests` for live results,
+and `DELETE /load-tests` to stop. A start request has this shape:
+
+```json
+{
+	"queue": "load-001",
+	"messageCount": 10000,
+	"producerCount": 8,
+	"consumerCount": 20,
+	"processingDelayMs": 10,
+	"failureProbability": 0.1,
+	"visibilityTimeoutMs": 1000,
+	"maxReceiveCount": 5
+}
+```

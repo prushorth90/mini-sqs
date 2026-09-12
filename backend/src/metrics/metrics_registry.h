@@ -11,6 +11,16 @@
 
 namespace mini_sqs {
 
+struct QueueMetricsSnapshot {
+    std::uint64_t published;
+    std::uint64_t acknowledged;
+    std::uint64_t retried;
+    std::uint64_t deadLettered;
+    std::size_t depth;
+    std::size_t inFlight;
+    double p95ProcessingLatencySeconds;
+};
+
 class MetricsRegistry {
 public:
     void queueCreated(std::string_view queueName, std::size_t depth, std::size_t inFlight);
@@ -35,6 +45,8 @@ public:
         std::uint64_t count,
         std::size_t depth,
         std::size_t inFlight);
+    QueueMetricsSnapshot snapshot(
+        std::string_view queueName, bool includeLatency = true) const;
     std::string prometheusText() const;
 
 private:

@@ -51,6 +51,25 @@ type SimulatorState = {
   failed: number
 }
 
+type LoadTestState = {
+  status: 'idle' | 'publishing' | 'processing' | 'completed' | 'stopped' | 'failed'
+  queue: string
+  messageCount: number
+  producerCount: number
+  consumerCount: number
+  processingDelayMs: number
+  failureProbability: number
+  visibilityTimeoutMs: number
+  maxReceiveCount: number
+  published: number
+  completed: number
+  retried: number
+  deadLettered: number
+  peakThroughput: number
+  durationMs: number
+  error: string
+}
+
 const emptyMetrics: DashboardMetrics = {
   queueDepth: 0,
   inFlight: 0,
@@ -69,6 +88,25 @@ const emptySimulator: SimulatorState = {
   received: 0,
   acknowledged: 0,
   failed: 0,
+}
+
+const emptyLoadTest: LoadTestState = {
+  status: 'idle',
+  queue: '',
+  messageCount: 0,
+  producerCount: 0,
+  consumerCount: 0,
+  processingDelayMs: 0,
+  failureProbability: 0,
+  visibilityTimeoutMs: 0,
+  maxReceiveCount: 0,
+  published: 0,
+  completed: 0,
+  retried: 0,
+  deadLettered: 0,
+  peakThroughput: 0,
+  durationMs: 0,
+  error: '',
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -105,7 +143,7 @@ function formatLatency(seconds: number) {
 }
 
 export default function App() {
-  const [view, setView] = useState<'dashboard' | 'simulator'>('dashboard')
+  const [view, setView] = useState<'dashboard' | 'simulator' | 'load-test'>('dashboard')
   const [queues, setQueues] = useState<string[]>([])
   const [selectedQueue, setSelectedQueue] = useState('')
   const selectedQueueRef = useRef('')
@@ -125,6 +163,18 @@ export default function App() {
   const [simulator, setSimulator] = useState(emptySimulator)
   const [simulatorPending, setSimulatorPending] = useState(false)
   const [simulatorFeedback, setSimulatorFeedback] = useState('')
+  const [loadQueueName, setLoadQueueName] = useState(() => `load-${Date.now()}`)
+  const [loadMessageCount, setLoadMessageCount] = useState(1000)
+  const [loadProducerCount, setLoadProducerCount] = useState(8)
+  const [loadConsumerCount, setLoadConsumerCount] = useState(20)
+  const [loadProcessingDelayMs, setLoadProcessingDelayMs] = useState(10)
+  const [loadFailurePercent, setLoadFailurePercent] = useState(10)
+  const [loadVisibilityTimeoutMs, setLoadVisibilityTimeoutMs] = useState(1000)
+  const [loadMaxReceiveCount, setLoadMaxReceiveCount] = useState(5)
+  const [loadTest, setLoadTest] = useState(emptyLoadTest)
+  const [loadMetrics, setLoadMetrics] = useState(emptyMetrics)
+  const [loadPending, setLoadPending] = useState(false)
+  const [loadFeedback, setLoadFeedback] = useState('')
 
   async function loadQueues() {
     const response = await fetchJson<{ queues: string[] }>(`${apiBase}/queues`)
@@ -145,13 +195,13 @@ export default function App() {
     setRefreshing(true)
     try {
       const encodedQueue = encodeURIComponent(queue)
-      const [recent, deadLetters, queueDepth, inFlight, retries, throughput, p95Latency] =
+      const [recent, queueDepth, inFlight, retries, dlqSize, throughput, p95Latency] =
         await Promise.all([
           fetchJson<{ messages: Message[] }>(`${apiBase}/queues/${encodedQueue}/messages/recent`),
-          fetchJson<{ messages: Message[] }>(`${apiBase}/queues/${encodedQueue}/dlq/messages`),
           queryMetric(queueMetric('queue_depth', queue)),
           queryMetric(queueMetric('messages_in_flight', queue)),
           queryMetric(queueMetric('messages_retried_total', queue)),
+          queryMetric(queueMetric('messages_dlq_total', queue)),
           queryMetric(`rate(messages_published_total{queue="${queue}"}[1m])`),
           queryMetric(
             `message_processing_latency_seconds{queue="${queue}",quantile="0.95"}`,
@@ -162,7 +212,7 @@ export default function App() {
         queueDepth,
         inFlight,
         retries,
-        dlqSize: deadLetters.messages.length,
+        dlqSize,
         throughput,
         p95Latency,
       })
@@ -265,6 +315,82 @@ export default function App() {
     }
   }
 
+  async function loadLoadTest() {
+    const state = await fetchJson<LoadTestState>(`${apiBase}/load-tests`)
+    setLoadTest(state)
+  }
+
+  async function loadLoadMetrics(queue: string) {
+    if (!queue) {
+      setLoadMetrics(emptyMetrics)
+      return
+    }
+    const [queueDepth, inFlight, retries, dlqSize, throughput, p95Latency] =
+      await Promise.all([
+        queryMetric(queueMetric('queue_depth', queue)),
+        queryMetric(queueMetric('messages_in_flight', queue)),
+        queryMetric(queueMetric('messages_retried_total', queue)),
+        queryMetric(queueMetric('messages_dlq_total', queue)),
+        queryMetric(`rate(messages_published_total{queue="${queue}"}[1m])`),
+        queryMetric(`message_processing_latency_seconds{queue="${queue}",quantile="0.95"}`),
+      ])
+    setLoadMetrics({ queueDepth, inFlight, retries, dlqSize, throughput, p95Latency })
+  }
+
+  async function handleStartLoadTest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const queue = loadQueueName.trim()
+    if (!queue) return
+
+    setLoadPending(true)
+    setLoadFeedback('')
+    try {
+      const response = await fetch(`${apiBase}/load-tests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          queue,
+          messageCount: loadMessageCount,
+          producerCount: loadProducerCount,
+          consumerCount: loadConsumerCount,
+          processingDelayMs: loadProcessingDelayMs,
+          failureProbability: loadFailurePercent / 100,
+          visibilityTimeoutMs: loadVisibilityTimeoutMs,
+          maxReceiveCount: loadMaxReceiveCount,
+        }),
+      })
+      if (!response.ok) {
+        const result = await response.json() as { error?: string }
+        throw new Error(result.error ?? `Start failed with status ${response.status}`)
+      }
+      setSelectedQueue(queue)
+      await Promise.all([loadLoadTest(), loadQueues()])
+      setLoadFeedback(`Running on ${queue}`)
+    } catch (requestError) {
+      setLoadFeedback(
+        requestError instanceof Error ? requestError.message : 'Unable to start load test',
+      )
+    } finally {
+      setLoadPending(false)
+    }
+  }
+
+  async function handleStopLoadTest() {
+    setLoadPending(true)
+    try {
+      const response = await fetch(`${apiBase}/load-tests`, { method: 'DELETE' })
+      if (!response.ok) throw new Error(`Stop failed with status ${response.status}`)
+      await loadLoadTest()
+      setLoadFeedback('Load test stopped')
+    } catch (requestError) {
+      setLoadFeedback(
+        requestError instanceof Error ? requestError.message : 'Unable to stop load test',
+      )
+    } finally {
+      setLoadPending(false)
+    }
+  }
+
   useEffect(() => {
     loadQueues().catch((requestError: unknown) => {
       setError(requestError instanceof Error ? requestError.message : 'Unable to load queues')
@@ -275,6 +401,21 @@ export default function App() {
     }, 5000)
     return () => window.clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    void loadLoadTest().catch(() => undefined)
+    const interval = window.setInterval(() => void loadLoadTest().catch(() => undefined), 500)
+    return () => window.clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    void loadLoadMetrics(loadTest.queue).catch(() => undefined)
+    const interval = window.setInterval(
+      () => void loadLoadMetrics(loadTest.queue).catch(() => undefined),
+      1000,
+    )
+    return () => window.clearInterval(interval)
+  }, [loadTest.queue])
 
   useEffect(() => {
     selectedQueueRef.current = selectedQueue
@@ -298,6 +439,15 @@ export default function App() {
     { label: 'P95 latency', value: formatLatency(metrics.p95Latency), icon: Clock3 },
   ]
 
+  const loadCards = [
+    { label: 'Queue depth', value: loadMetrics.queueDepth.toLocaleString(), icon: Inbox },
+    { label: 'In flight', value: loadMetrics.inFlight.toLocaleString(), icon: Activity },
+    { label: 'Retries', value: loadMetrics.retries.toLocaleString(), icon: RotateCcw },
+    { label: 'DLQ size', value: loadMetrics.dlqSize.toLocaleString(), icon: TriangleAlert },
+    { label: 'Throughput', value: `${loadMetrics.throughput.toFixed(2)}/s`, icon: Gauge },
+    { label: 'P95 latency', value: formatLatency(loadMetrics.p95Latency), icon: Clock3 },
+  ]
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -319,6 +469,13 @@ export default function App() {
             type="button"
           >
             <Users size={15} /><span>Simulator</span>
+          </button>
+          <button
+            className={view === 'load-test' ? 'view-button active' : 'view-button'}
+            onClick={() => setView('load-test')}
+            type="button"
+          >
+            <Gauge size={15} /><span>Load test</span>
           </button>
         </div>
         <div className="sidebar-heading">
@@ -346,7 +503,7 @@ export default function App() {
         <header className="workspace-header">
           <div>
             <p className="eyebrow">{view === 'dashboard' ? 'Queue overview' : 'Load testing'}</p>
-            <h1>{view === 'dashboard' ? (selectedQueue || 'No queue selected') : 'Consumer simulator'}</h1>
+            <h1>{view === 'dashboard' ? (selectedQueue || 'No queue selected') : view === 'simulator' ? 'Consumer simulator' : 'Broker stress test'}</h1>
           </div>
           <div className="header-actions">
             <span className="updated">
@@ -451,7 +608,7 @@ export default function App() {
             </table>
           </div>
         </section>
-        </> : <section className="simulator-layout">
+        </> : view === 'simulator' ? <section className="simulator-layout">
           <div className="simulator-panel">
             <div className="simulator-heading">
               <div><p className="eyebrow">Configuration</p><h2>Consumer workers</h2></div>
@@ -538,6 +695,58 @@ export default function App() {
               <article><Timer size={17} /><span>Success rate</span><strong>{simulator.received ? `${((simulator.acknowledged / simulator.received) * 100).toFixed(1)}%` : '—'}</strong></article>
             </div>
           </div>
+        </section> : <section className="load-test-layout">
+          <div className="load-config-panel">
+            <div className="simulator-heading">
+              <div><p className="eyebrow">Configuration</p><h2>Real message load</h2></div>
+              <span className={loadTest.status === 'publishing' || loadTest.status === 'processing' ? 'run-status running' : 'run-status'}>
+                <i />{loadTest.status}
+              </span>
+            </div>
+            <form className="load-test-form" onSubmit={handleStartLoadTest}>
+              <label className="wide-field"><span>New queue name</span><input maxLength={80} onChange={(event) => setLoadQueueName(event.target.value)} pattern="[A-Za-z0-9_-]+" required value={loadQueueName} /></label>
+              <label><span>Messages</span><input max={50000} min={1000} onChange={(event) => setLoadMessageCount(Number(event.target.value))} required step={1000} type="number" value={loadMessageCount} /></label>
+              <label><span>Producers</span><input max={100} min={1} onChange={(event) => setLoadProducerCount(Number(event.target.value))} required type="number" value={loadProducerCount} /></label>
+              <label><span>Consumers</span><input max={500} min={1} onChange={(event) => setLoadConsumerCount(Number(event.target.value))} required type="number" value={loadConsumerCount} /></label>
+              <label><span>Processing delay <small>ms</small></span><input max={600000} min={0} onChange={(event) => setLoadProcessingDelayMs(Number(event.target.value))} required type="number" value={loadProcessingDelayMs} /></label>
+              <label><span>Failure probability <small>%</small></span><input max={100} min={0} onChange={(event) => setLoadFailurePercent(Number(event.target.value))} required type="number" value={loadFailurePercent} /></label>
+              <label><span>Visibility timeout <small>ms</small></span><input max={43200000} min={1} onChange={(event) => setLoadVisibilityTimeoutMs(Number(event.target.value))} required type="number" value={loadVisibilityTimeoutMs} /></label>
+              <label><span>Max receive count</span><input max={1000} min={1} onChange={(event) => setLoadMaxReceiveCount(Number(event.target.value))} required type="number" value={loadMaxReceiveCount} /></label>
+              <div className="simulator-actions wide-field">
+                <button className="start-button" disabled={loadPending || loadTest.status === 'publishing' || loadTest.status === 'processing'} type="submit"><Play fill="currentColor" size={16} /><span>Start load test</span></button>
+                <button className="stop-button" disabled={loadPending || (loadTest.status !== 'publishing' && loadTest.status !== 'processing')} onClick={() => void handleStopLoadTest()} type="button"><Square fill="currentColor" size={15} /><span>Stop</span></button>
+              </div>
+            </form>
+            {loadFeedback && <p className="simulator-feedback" role="status">{loadFeedback}</p>}
+          </div>
+
+          <div className="load-results-panel">
+            <div className="simulator-heading">
+              <div><p className="eyebrow">Measured results</p><h2>{loadTest.queue || 'No test started'}</h2></div>
+              <span className="run-config">{loadTest.messageCount ? `${loadTest.producerCount} producers · ${loadTest.consumerCount} consumers` : ''}</span>
+            </div>
+            <div className="load-progress" aria-label="Load test progress">
+              <span style={{ width: `${loadTest.messageCount ? Math.min(100, ((loadTest.completed + loadTest.deadLettered) / loadTest.messageCount) * 100) : 0}%` }} />
+            </div>
+            <div className="result-grid">
+              <article><span>Total published</span><strong>{loadTest.published.toLocaleString()}</strong></article>
+              <article><span>Completed (ACK)</span><strong>{loadTest.completed.toLocaleString()}</strong></article>
+              <article><span>Retried</span><strong>{loadTest.retried.toLocaleString()}</strong></article>
+              <article><span>DLQed</span><strong>{loadTest.deadLettered.toLocaleString()}</strong></article>
+              <article><span>Peak throughput</span><strong>{loadTest.peakThroughput.toFixed(0)}/s</strong></article>
+              <article><span>Duration</span><strong>{(loadTest.durationMs / 1000).toFixed(2)}s</strong></article>
+            </div>
+            {loadTest.error && <p className="load-error" role="alert">{loadTest.error}</p>}
+          </div>
+
+          <section className="load-metrics" aria-label="Load queue metrics">
+            {loadCards.map(({ label, value, icon: Icon }) => (
+              <article className="metric-card" key={label}>
+                <div className="metric-label"><Icon size={16} /><span>{label}</span></div>
+                <strong>{value}</strong>
+              </article>
+            ))}
+          </section>
         </section>}
       </main>
     </div>

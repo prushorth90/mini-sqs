@@ -19,6 +19,32 @@ void expectContains(const std::string& metrics, std::string_view expected) {
     }
 }
 
+void expect(bool condition, std::string_view message) {
+    if (!condition) {
+        throw std::runtime_error(std::string(message));
+    }
+}
+
+void exposesQueueMetricsSnapshot() {
+    mini_sqs::MetricsRegistry metrics;
+    metrics.queueCreated("load", 0, 0);
+    metrics.messagePublished("load", 1, 0);
+    metrics.messageReceived("load", 10ms, 0, 1);
+    metrics.messagesRetried("load", 2, 1, 0);
+    metrics.messageAcknowledged("load", 25ms, 0, 0);
+    metrics.messagesDeadLettered("load", 1, 0, 0);
+
+    const auto snapshot = metrics.snapshot("load");
+    expect(snapshot.published == 1, "snapshot should include published count");
+    expect(snapshot.acknowledged == 1, "snapshot should include acknowledged count");
+    expect(snapshot.retried == 2, "snapshot should include retry count");
+    expect(snapshot.deadLettered == 1, "snapshot should include DLQ count");
+    expect(snapshot.depth == 0 && snapshot.inFlight == 0,
+           "snapshot should include current gauges");
+    expect(snapshot.p95ProcessingLatencySeconds == 0.025,
+           "snapshot should include processing latency P95");
+}
+
 }  // namespace
 
 int main() {
@@ -42,6 +68,7 @@ int main() {
         }
 
         const auto output = metrics->prometheusText();
+        exposesQueueMetricsSnapshot();
         expectContains(output, "messages_published_total{queue=\"orders\"} 2");
         expectContains(output, "messages_acked_total{queue=\"orders\"} 1");
         expectContains(output, "messages_retried_total{queue=\"orders\"} 1");

@@ -121,6 +121,31 @@ void MetricsRegistry::messagesDeadLettered(
     setGauges(metrics, depth, inFlight);
 }
 
+QueueMetricsSnapshot MetricsRegistry::snapshot(
+    std::string_view queueName, bool includeLatency) const {
+    std::lock_guard lock(mutex_);
+    const auto iterator = queues_.find(std::string(queueName));
+    if (iterator == queues_.end()) {
+        return {};
+    }
+    const auto& metrics = iterator->second;
+    double p95ProcessingLatencySeconds = 0;
+    if (includeLatency) {
+        auto processingLatencies = metrics.processingLatencies;
+        std::sort(processingLatencies.begin(), processingLatencies.end());
+        p95ProcessingLatencySeconds = quantile(processingLatencies, 0.95);
+    }
+    return QueueMetricsSnapshot{
+        .published = metrics.published,
+        .acknowledged = metrics.acknowledged,
+        .retried = metrics.retried,
+        .deadLettered = metrics.deadLettered,
+        .depth = metrics.depth,
+        .inFlight = metrics.inFlight,
+        .p95ProcessingLatencySeconds = p95ProcessingLatencySeconds,
+    };
+}
+
 std::string MetricsRegistry::prometheusText() const {
     std::vector<std::pair<std::string, QueueMetrics>> snapshot;
     {

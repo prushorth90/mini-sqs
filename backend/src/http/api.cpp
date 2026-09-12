@@ -4,6 +4,7 @@
 #include "queue/message.h"
 #include "queue/queue_registry.h"
 #include "simulator/consumer_simulator.h"
+#include "simulator/load_test_runner.h"
 
 #include <algorithm>
 #include <chrono>
@@ -52,7 +53,11 @@ bool isValidQueueName(std::string_view queueName) {
 
 }  // namespace
 
-void configureRoutes(QueueApi& app, QueueRegistry& queues, ConsumerSimulator& simulator) {
+void configureRoutes(
+    QueueApi& app,
+    QueueRegistry& queues,
+    ConsumerSimulator& simulator,
+    LoadTestRunner& loadTests) {
     CROW_ROUTE(app, "/metrics")
     ([&queues] {
         crow::response response(200, queues.metrics()->prometheusText());
@@ -172,6 +177,96 @@ void configureRoutes(QueueApi& app, QueueRegistry& queues, ConsumerSimulator& si
         .methods(crow::HTTPMethod::DELETE)
     ([&simulator] {
         simulator.stop();
+        return crow::response(204);
+    });
+
+    CROW_ROUTE(app, "/load-tests")
+        .methods(crow::HTTPMethod::POST)
+    ([&loadTests](const crow::request& request) {
+        const auto payload = crow::json::load(request.body);
+        if (!payload
+            || !payload.has("queue") || payload["queue"].t() != crow::json::type::String
+            || !payload.has("messageCount") || payload["messageCount"].t() != crow::json::type::Number
+            || !payload.has("producerCount") || payload["producerCount"].t() != crow::json::type::Number
+            || !payload.has("consumerCount") || payload["consumerCount"].t() != crow::json::type::Number
+            || !payload.has("processingDelayMs") || payload["processingDelayMs"].t() != crow::json::type::Number
+            || !payload.has("failureProbability") || payload["failureProbability"].t() != crow::json::type::Number
+            || !payload.has("visibilityTimeoutMs") || payload["visibilityTimeoutMs"].t() != crow::json::type::Number
+            || !payload.has("maxReceiveCount") || payload["maxReceiveCount"].t() != crow::json::type::Number) {
+            return jsonResponse(400, {{"error", "all load-test configuration fields are required"}});
+        }
+
+        const std::string queueName = payload["queue"].s();
+        const auto messageCount = payload["messageCount"].i();
+        const auto producerCount = payload["producerCount"].i();
+        const auto consumerCount = payload["consumerCount"].i();
+        const auto processingDelayMs = payload["processingDelayMs"].i();
+        const auto failureProbability = payload["failureProbability"].d();
+        const auto visibilityTimeoutMs = payload["visibilityTimeoutMs"].i();
+        const auto maxReceiveCount = payload["maxReceiveCount"].i();
+        if (!isValidQueueName(queueName)) {
+            return jsonResponse(400, {{"error", "queue name must use 1-80 letters, numbers, hyphens, or underscores"}});
+        }
+        if (messageCount < 1'000 || messageCount > 50'000) {
+            return jsonResponse(400, {{"error", "messageCount must be from 1000 to 50000"}});
+        }
+        if (producerCount < 1 || producerCount > 100
+            || consumerCount < 1 || consumerCount > 500) {
+            return jsonResponse(400, {{"error", "producerCount must be 1-100 and consumerCount must be 1-500"}});
+        }
+        if (processingDelayMs < 0 || processingDelayMs > 600'000
+            || visibilityTimeoutMs < 1 || visibilityTimeoutMs > 43'200'000
+            || maxReceiveCount < 1 || maxReceiveCount > 1'000
+            || failureProbability < 0 || failureProbability > 1) {
+            return jsonResponse(400, {{"error", "load-test configuration is outside allowed ranges"}});
+        }
+
+        const bool started = loadTests.start({
+            .queueName = queueName,
+            .messageCount = static_cast<std::uint32_t>(messageCount),
+            .producerCount = static_cast<std::uint32_t>(producerCount),
+            .consumers = {
+                .consumerCount = static_cast<std::uint32_t>(consumerCount),
+                .processingDelay = std::chrono::milliseconds(processingDelayMs),
+                .failureProbability = failureProbability,
+            },
+            .visibilityTimeout = std::chrono::milliseconds(visibilityTimeoutMs),
+            .maxReceiveCount = static_cast<std::uint32_t>(maxReceiveCount),
+        });
+        if (!started) {
+            return jsonResponse(409, {{"error", "queue already exists; use a unique load-test queue name"}});
+        }
+        return jsonResponse(202, {{"status", "publishing"}, {"queue", queueName}});
+    });
+
+    CROW_ROUTE(app, "/load-tests")
+        .methods(crow::HTTPMethod::GET)
+    ([&loadTests] {
+        const auto state = loadTests.snapshot();
+        return jsonResponse(200, {
+            {"status", state.status},
+            {"queue", state.config.queueName},
+            {"messageCount", state.config.messageCount},
+            {"producerCount", state.config.producerCount},
+            {"consumerCount", state.config.consumers.consumerCount},
+            {"processingDelayMs", state.config.consumers.processingDelay.count()},
+            {"failureProbability", state.config.consumers.failureProbability},
+            {"visibilityTimeoutMs", state.config.visibilityTimeout.count()},
+            {"maxReceiveCount", state.config.maxReceiveCount},
+            {"published", state.published},
+            {"completed", state.completed},
+            {"retried", state.retried},
+            {"deadLettered", state.deadLettered},
+            {"peakThroughput", state.peakThroughput},
+            {"durationMs", state.durationMs},
+            {"error", state.error},
+        });
+    });
+
+    CROW_ROUTE(app, "/load-tests")
+        .methods(crow::HTTPMethod::DELETE)
+    ([&loadTests] {
+        loadTests.stop();
         return crow::response(204);
     });
 
