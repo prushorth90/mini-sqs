@@ -18,8 +18,8 @@ import {
 } from 'lucide-react'
 import './App.css'
 
-const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
-const prometheusBase = import.meta.env.VITE_PROMETHEUS_URL ?? 'http://localhost:9090'
+const apiBase = import.meta.env.VITE_API_URL ?? '/api'
+const prometheusBase = import.meta.env.VITE_PROMETHEUS_URL ?? '/prometheus'
 
 type MessageStatus = 'available' | 'in-flight' | 'dead-letter'
 
@@ -78,7 +78,7 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 
 async function queryMetric(query: string): Promise<number> {
-  const url = new URL('/api/v1/query', prometheusBase)
+  const url = new URL(`${prometheusBase.replace(/\/$/, '')}/api/v1/query`, globalThis.location.origin)
   url.searchParams.set('query', query)
   const response = await fetchJson<{
     data: { result: Array<{ value: [number, string] }> }

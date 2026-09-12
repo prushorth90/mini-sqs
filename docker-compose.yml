@@ -11,9 +11,10 @@ services:
     build:
       context: ./frontend
     ports:
-      - "5174:5173"
+      - "5174:80"
     depends_on:
       - backend
+      - prometheus
 
   prometheus:
     image: prom/prometheus:v3.5.0

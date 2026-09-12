@@ -2,7 +2,13 @@
 
 Mini SQS is an in-memory message broker with named queues, blocking consumers,
 visibility timeouts, receipt-based acknowledgements, retries, and dead-letter
-queues. The backend runs on port 8080 and the React dashboard runs on port 5173.
+queues. The backend runs on port 8080 and Docker Compose exposes the React
+dashboard on port 5174.
+
+Run `docker compose up --build`, then open `http://localhost:5174`. The frontend
+is compiled in a Node build stage and served by a minimal nginx runtime image.
+Browser requests use same-origin `/api` and `/prometheus` paths, which nginx
+proxies to the backend and Prometheus containers respectively.
 
 ## Delivery semantics
 
