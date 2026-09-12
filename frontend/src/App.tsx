@@ -6,10 +6,15 @@ import {
   Clock3,
   Gauge,
   Inbox,
+  LayoutDashboard,
+  Play,
   RefreshCw,
   RotateCcw,
   Send,
+  Square,
+  Timer,
   TriangleAlert,
+  Users,
 } from 'lucide-react'
 import './App.css'
 
@@ -35,6 +40,17 @@ type DashboardMetrics = {
   p95Latency: number
 }
 
+type SimulatorState = {
+  running: boolean
+  queue: string
+  consumerCount: number
+  processingDelayMs: number
+  failureProbability: number
+  received: number
+  acknowledged: number
+  failed: number
+}
+
 const emptyMetrics: DashboardMetrics = {
   queueDepth: 0,
   inFlight: 0,
@@ -42,6 +58,17 @@ const emptyMetrics: DashboardMetrics = {
   dlqSize: 0,
   throughput: 0,
   p95Latency: 0,
+}
+
+const emptySimulator: SimulatorState = {
+  running: false,
+  queue: '',
+  consumerCount: 0,
+  processingDelayMs: 0,
+  failureProbability: 0,
+  received: 0,
+  acknowledged: 0,
+  failed: 0,
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -78,6 +105,7 @@ function formatLatency(seconds: number) {
 }
 
 export default function App() {
+  const [view, setView] = useState<'dashboard' | 'simulator'>('dashboard')
   const [queues, setQueues] = useState<string[]>([])
   const [selectedQueue, setSelectedQueue] = useState('')
   const selectedQueueRef = useRef('')
@@ -91,6 +119,12 @@ export default function App() {
   const [idempotencyKey, setIdempotencyKey] = useState('')
   const [publishing, setPublishing] = useState(false)
   const [publishFeedback, setPublishFeedback] = useState('')
+  const [consumerCount, setConsumerCount] = useState(20)
+  const [processingDelayMs, setProcessingDelayMs] = useState(500)
+  const [failurePercent, setFailurePercent] = useState(10)
+  const [simulator, setSimulator] = useState(emptySimulator)
+  const [simulatorPending, setSimulatorPending] = useState(false)
+  const [simulatorFeedback, setSimulatorFeedback] = useState('')
 
   async function loadQueues() {
     const response = await fetchJson<{ queues: string[] }>(`${apiBase}/queues`)
@@ -180,6 +214,57 @@ export default function App() {
     }
   }
 
+  async function loadSimulator() {
+    const state = await fetchJson<SimulatorState>(`${apiBase}/simulator`)
+    setSimulator(state)
+  }
+
+  async function handleStartSimulator(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!selectedQueue) return
+
+    setSimulatorPending(true)
+    setSimulatorFeedback('')
+    try {
+      const response = await fetch(`${apiBase}/simulator`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          queue: selectedQueue,
+          consumerCount,
+          processingDelayMs,
+          failureProbability: failurePercent / 100,
+        }),
+      })
+      if (!response.ok) throw new Error(`Start failed with status ${response.status}`)
+      await loadSimulator()
+      setSimulatorFeedback(`Consumers started on ${selectedQueue}`)
+    } catch (requestError) {
+      setSimulatorFeedback(
+        requestError instanceof Error ? requestError.message : 'Unable to start consumers',
+      )
+    } finally {
+      setSimulatorPending(false)
+    }
+  }
+
+  async function handleStopSimulator() {
+    setSimulatorPending(true)
+    setSimulatorFeedback('')
+    try {
+      const response = await fetch(`${apiBase}/simulator`, { method: 'DELETE' })
+      if (!response.ok) throw new Error(`Stop failed with status ${response.status}`)
+      await loadSimulator()
+      setSimulatorFeedback('Consumers stopped')
+    } catch (requestError) {
+      setSimulatorFeedback(
+        requestError instanceof Error ? requestError.message : 'Unable to stop consumers',
+      )
+    } finally {
+      setSimulatorPending(false)
+    }
+  }
+
   useEffect(() => {
     loadQueues().catch((requestError: unknown) => {
       setError(requestError instanceof Error ? requestError.message : 'Unable to load queues')
@@ -198,6 +283,12 @@ export default function App() {
     return () => window.clearInterval(interval)
   }, [selectedQueue])
 
+  useEffect(() => {
+    void loadSimulator().catch(() => undefined)
+    const interval = window.setInterval(() => void loadSimulator().catch(() => undefined), 1000)
+    return () => window.clearInterval(interval)
+  }, [])
+
   const cards = [
     { label: 'Queue depth', value: metrics.queueDepth.toLocaleString(), icon: Inbox },
     { label: 'In flight', value: metrics.inFlight.toLocaleString(), icon: Activity },
@@ -213,6 +304,22 @@ export default function App() {
         <div className="brand">
           <span className="brand-mark"><Box size={18} strokeWidth={2.5} /></span>
           <div><strong>Mini SQS</strong><small>Broker console</small></div>
+        </div>
+        <div className="view-switcher" aria-label="Console views">
+          <button
+            className={view === 'dashboard' ? 'view-button active' : 'view-button'}
+            onClick={() => setView('dashboard')}
+            type="button"
+          >
+            <LayoutDashboard size={15} /><span>Dashboard</span>
+          </button>
+          <button
+            className={view === 'simulator' ? 'view-button active' : 'view-button'}
+            onClick={() => setView('simulator')}
+            type="button"
+          >
+            <Users size={15} /><span>Simulator</span>
+          </button>
         </div>
         <div className="sidebar-heading">
           <span>Queues</span><span className="queue-count">{queues.length}</span>
@@ -237,7 +344,10 @@ export default function App() {
 
       <main className="workspace">
         <header className="workspace-header">
-          <div><p className="eyebrow">Queue overview</p><h1>{selectedQueue || 'No queue selected'}</h1></div>
+          <div>
+            <p className="eyebrow">{view === 'dashboard' ? 'Queue overview' : 'Load testing'}</p>
+            <h1>{view === 'dashboard' ? (selectedQueue || 'No queue selected') : 'Consumer simulator'}</h1>
+          </div>
           <div className="header-actions">
             <span className="updated">
               {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Waiting for data'}
@@ -259,6 +369,7 @@ export default function App() {
 
         {error && <div className="error-banner" role="alert">{error}</div>}
 
+        {view === 'dashboard' ? <>
         <section className="metric-grid" aria-label="Queue metrics">
           {cards.map(({ label, value, icon: Icon }) => (
             <article className="metric-card" key={label}>
@@ -340,6 +451,94 @@ export default function App() {
             </table>
           </div>
         </section>
+        </> : <section className="simulator-layout">
+          <div className="simulator-panel">
+            <div className="simulator-heading">
+              <div><p className="eyebrow">Configuration</p><h2>Consumer workers</h2></div>
+              <span className={simulator.running ? 'run-status running' : 'run-status'}>
+                <i />{simulator.running ? 'Running' : 'Stopped'}
+              </span>
+            </div>
+            <form className="simulator-form" onSubmit={handleStartSimulator}>
+              <label>
+                <span>Queue</span>
+                <select
+                  disabled={simulatorPending || queues.length === 0}
+                  onChange={(event) => setSelectedQueue(event.target.value)}
+                  value={selectedQueue}
+                >
+                  {queues.map((queue) => <option key={queue} value={queue}>{queue}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Consumers</span>
+                <input
+                  max={500}
+                  min={1}
+                  onChange={(event) => setConsumerCount(Number(event.target.value))}
+                  required
+                  type="number"
+                  value={consumerCount}
+                />
+              </label>
+              <label>
+                <span>Processing delay <small>ms</small></span>
+                <input
+                  max={600000}
+                  min={0}
+                  onChange={(event) => setProcessingDelayMs(Number(event.target.value))}
+                  required
+                  step={50}
+                  type="number"
+                  value={processingDelayMs}
+                />
+              </label>
+              <label>
+                <span>Failure probability <small>%</small></span>
+                <input
+                  max={100}
+                  min={0}
+                  onChange={(event) => setFailurePercent(Number(event.target.value))}
+                  required
+                  type="number"
+                  value={failurePercent}
+                />
+              </label>
+              <div className="simulator-actions">
+                <button
+                  className="start-button"
+                  disabled={!selectedQueue || simulatorPending}
+                  type="submit"
+                >
+                  <Play size={16} fill="currentColor" />
+                  <span>{simulator.running ? 'Restart' : 'Start'}</span>
+                </button>
+                <button
+                  className="stop-button"
+                  disabled={!simulator.running || simulatorPending}
+                  onClick={() => void handleStopSimulator()}
+                  type="button"
+                >
+                  <Square size={15} fill="currentColor" /><span>Stop</span>
+                </button>
+              </div>
+            </form>
+            {simulatorFeedback && <p className="simulator-feedback" role="status">{simulatorFeedback}</p>}
+          </div>
+
+          <div className="run-panel">
+            <div className="simulator-heading">
+              <div><p className="eyebrow">Live run</p><h2>{simulator.queue || 'No active queue'}</h2></div>
+              {simulator.running && <span className="run-config">{simulator.consumerCount} workers · {simulator.processingDelayMs} ms · {(simulator.failureProbability * 100).toFixed(0)}%</span>}
+            </div>
+            <div className="run-stats">
+              <article><Users size={17} /><span>Received</span><strong>{simulator.received.toLocaleString()}</strong></article>
+              <article><Activity size={17} /><span>Acknowledged</span><strong>{simulator.acknowledged.toLocaleString()}</strong></article>
+              <article><TriangleAlert size={17} /><span>Failed</span><strong>{simulator.failed.toLocaleString()}</strong></article>
+              <article><Timer size={17} /><span>Success rate</span><strong>{simulator.received ? `${((simulator.acknowledged / simulator.received) * 100).toFixed(1)}%` : '—'}</strong></article>
+            </div>
+          </div>
+        </section>}
       </main>
     </div>
   )

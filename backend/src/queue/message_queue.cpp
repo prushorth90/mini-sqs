@@ -86,6 +86,29 @@ std::optional<Delivery> MessageQueue::receive() {
         return isShuttingDown_ || !availableMessages_.empty();
     });
 
+    auto delivery = takeAvailableMessage();
+    lock.unlock();
+    if (delivery) {
+        condition_.notify_all();
+    }
+    return delivery;
+}
+
+std::optional<Delivery> MessageQueue::receiveFor(std::chrono::milliseconds waitTime) {
+    std::unique_lock lock(mutex_);
+    condition_.wait_for(lock, waitTime, [this] {
+        return isShuttingDown_ || !availableMessages_.empty();
+    });
+
+    auto delivery = takeAvailableMessage();
+    lock.unlock();
+    if (delivery) {
+        condition_.notify_all();
+    }
+    return delivery;
+}
+
+std::optional<Delivery> MessageQueue::takeAvailableMessage() {
     if (availableMessages_.empty()) {
         return std::nullopt;
     }
@@ -115,13 +138,10 @@ std::optional<Delivery> MessageQueue::receive() {
         metrics_->messageReceived(
             queueName_, waitTime, availableMessages_.size(), inFlight_.size());
     }
-    Delivery delivery{
+    return Delivery{
         .message = std::move(message),
         .receiptHandle = std::move(receiptHandle),
     };
-    lock.unlock();
-    condition_.notify_all();
-    return delivery;
 }
 
 bool MessageQueue::acknowledge(std::string_view receiptHandle) {

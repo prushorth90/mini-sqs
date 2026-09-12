@@ -61,6 +61,7 @@ public:
 
     PublishResult publish(Message message);
     std::optional<Delivery> receive();
+    std::optional<Delivery> receiveFor(std::chrono::milliseconds waitTime);
     bool acknowledge(std::string_view receiptHandle);
     std::vector<Message> deadLetterMessages() const;
     std::vector<MessageSnapshot> recentMessages(std::size_t limit = 50) const;
@@ -81,6 +82,7 @@ private:
     };
 
     void reapExpiredMessages();
+    std::optional<Delivery> takeAvailableMessage();
     bool requeueExpiredMessages(std::chrono::steady_clock::time_point now);
     std::chrono::steady_clock::time_point nextVisibilityDeadline() const;
     void removeExpiredDeduplicationEntries(std::chrono::steady_clock::time_point now);

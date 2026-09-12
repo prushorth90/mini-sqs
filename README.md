@@ -40,3 +40,20 @@ and P99 values plus sample count and sum.
 Prometheus runs at `http://localhost:9090` under Docker Compose and scrapes the
 backend's `/metrics` endpoint every five seconds. Its time-series database uses
 a named volume, so collected development metrics survive container restarts.
+
+## Consumer simulator
+
+Open the dashboard at `http://localhost:5174`, select **Simulator**, choose a
+queue, and configure the consumer count, processing delay, and failure
+probability. The defaults are 20 consumers, 500 ms processing, and a 10%
+failure rate. Start the simulator, publish messages, then return to the
+dashboard to watch in-flight, retry, latency, and DLQ metrics.
+
+The workers run in the C++ backend rather than in browser tabs, so large worker
+counts are independent of React rendering and page lifecycle. A simulated
+failure intentionally omits the acknowledgement; the queue's normal visibility
+timeout then drives retries and dead-lettering. Only one simulation is active
+at a time, and starting another configuration replaces the current run.
+
+The simulator API is `POST /simulator` to start or replace a run,
+`GET /simulator` for live counters, and `DELETE /simulator` to stop it.

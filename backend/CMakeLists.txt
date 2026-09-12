@@ -24,6 +24,7 @@ add_library(mini-sqs-core
 	src/queue/message.cpp
 	src/queue/message_queue.cpp
 	src/queue/queue_registry.cpp
+	src/simulator/consumer_simulator.cpp
 )
 target_compile_features(mini-sqs-core PUBLIC cxx_std_20)
 target_include_directories(mini-sqs-core PUBLIC src)
@@ -68,4 +69,8 @@ if(BUILD_TESTING)
 	target_link_libraries(message-queue-load-test PRIVATE mini-sqs-core Threads::Threads)
 	add_test(NAME message-queue-load-test COMMAND message-queue-load-test)
 	set_tests_properties(message-queue-load-test PROPERTIES TIMEOUT 30)
+
+	add_executable(consumer-simulator-tests tests/consumer_simulator_test.cpp)
+	target_link_libraries(consumer-simulator-tests PRIVATE mini-sqs-core Threads::Threads)
+	add_test(NAME consumer-simulator-tests COMMAND consumer-simulator-tests)
 endif()

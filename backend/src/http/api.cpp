@@ -3,6 +3,7 @@
 #include "metrics/metrics_registry.h"
 #include "queue/message.h"
 #include "queue/queue_registry.h"
+#include "simulator/consumer_simulator.h"
 
 #include <algorithm>
 #include <chrono>
@@ -51,7 +52,7 @@ bool isValidQueueName(std::string_view queueName) {
 
 }  // namespace
 
-void configureRoutes(QueueApi& app, QueueRegistry& queues) {
+void configureRoutes(QueueApi& app, QueueRegistry& queues, ConsumerSimulator& simulator) {
     CROW_ROUTE(app, "/metrics")
     ([&queues] {
         crow::response response(200, queues.metrics()->prometheusText());
@@ -111,6 +112,67 @@ void configureRoutes(QueueApi& app, QueueRegistry& queues) {
         crow::json::wvalue body;
         body["queues"] = queues.list();
         return jsonResponse(200, std::move(body));
+    });
+
+    CROW_ROUTE(app, "/simulator")
+        .methods(crow::HTTPMethod::POST)
+    ([&queues, &simulator](const crow::request& request) {
+        const auto payload = crow::json::load(request.body);
+        if (!payload
+            || !payload.has("queue") || payload["queue"].t() != crow::json::type::String
+            || !payload.has("consumerCount") || payload["consumerCount"].t() != crow::json::type::Number
+            || !payload.has("processingDelayMs") || payload["processingDelayMs"].t() != crow::json::type::Number
+            || !payload.has("failureProbability") || payload["failureProbability"].t() != crow::json::type::Number) {
+            return jsonResponse(400, {{"error", "queue, consumerCount, processingDelayMs, and failureProbability are required"}});
+        }
+
+        const auto consumerCount = payload["consumerCount"].i();
+        const auto processingDelayMs = payload["processingDelayMs"].i();
+        const auto failureProbability = payload["failureProbability"].d();
+        if (consumerCount < 1 || consumerCount > 500) {
+            return jsonResponse(400, {{"error", "consumerCount must be from 1 to 500"}});
+        }
+        if (processingDelayMs < 0 || processingDelayMs > 600'000) {
+            return jsonResponse(400, {{"error", "processingDelayMs must be from 0 to 600000"}});
+        }
+        if (failureProbability < 0 || failureProbability > 1) {
+            return jsonResponse(400, {{"error", "failureProbability must be from 0 to 1"}});
+        }
+
+        const std::string queueName = payload["queue"].s();
+        const auto queue = queues.find(queueName);
+        if (!queue) {
+            return jsonResponse(404, {{"error", "queue not found"}});
+        }
+        simulator.start(queueName, queue, {
+            .consumerCount = static_cast<std::uint32_t>(consumerCount),
+            .processingDelay = std::chrono::milliseconds(processingDelayMs),
+            .failureProbability = failureProbability,
+        });
+        return jsonResponse(200, {{"running", true}});
+    });
+
+    CROW_ROUTE(app, "/simulator")
+        .methods(crow::HTTPMethod::GET)
+    ([&simulator] {
+        const auto state = simulator.snapshot();
+        return jsonResponse(200, {
+            {"running", state.running},
+            {"queue", state.queueName},
+            {"consumerCount", state.config.consumerCount},
+            {"processingDelayMs", state.config.processingDelay.count()},
+            {"failureProbability", state.config.failureProbability},
+            {"received", state.received},
+            {"acknowledged", state.acknowledged},
+            {"failed", state.failed},
+        });
+    });
+
+    CROW_ROUTE(app, "/simulator")
+        .methods(crow::HTTPMethod::DELETE)
+    ([&simulator] {
+        simulator.stop();
+        return crow::response(204);
     });
 
     CROW_ROUTE(app, "/queues/<string>/messages")

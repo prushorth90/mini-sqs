@@ -58,6 +58,27 @@ void wakesBlockedConsumerWhenMessageIsPublished() {
     expect(received.get()->message.body == "wake up", "consumer should receive the published message");
 }
 
+    void boundedReceiveTimesOutAndStillWakesForMessages() {
+        mini_sqs::MessageQueue queue;
+
+        const auto startedAt = std::chrono::steady_clock::now();
+        expect(!queue.receiveFor(30ms).has_value(),
+            "bounded receive should return empty when its wait expires");
+        expect(std::chrono::steady_clock::now() - startedAt >= 20ms,
+            "bounded receive should wait rather than busy-polling");
+
+        auto received = std::async(std::launch::async, [&queue] {
+         return queue.receiveFor(1s);
+        });
+        std::this_thread::sleep_for(20ms);
+        queue.publish(mini_sqs::Message::create("bounded wake up"));
+
+        expect(received.wait_for(200ms) == std::future_status::ready,
+            "publishing should wake a bounded receiver before its timeout");
+        expect(received.get()->message.body == "bounded wake up",
+            "bounded receiver should return the published message");
+    }
+
 void acknowledgesOnlyInFlightMessages() {
     mini_sqs::MessageQueue queue;
     queue.publish(mini_sqs::Message::create("acknowledge me"));
@@ -230,6 +251,7 @@ int main() {
     try {
         deliversMessagesInPublishOrder();
         wakesBlockedConsumerWhenMessageIsPublished();
+        boundedReceiveTimesOutAndStillWakesForMessages();
         acknowledgesOnlyInFlightMessages();
         keepsUnacknowledgedMessagesInFlight();
         redeliversAfterVisibilityTimeout();
